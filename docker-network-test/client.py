@@ -1,42 +1,58 @@
 import socket
 import sys
+import time
 
 HOST = "0.0.0.0"
 PORT = 5000
 
 def run_server():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
     server.bind((HOST, PORT))
-    server.listen(1)
+    server.listen(5)
 
     print(f"server listening on {HOST}:{PORT}")
 
-    conn, addr = server.accept()
+    while True:
+        print("waiting for connection...")
 
-    print(f"server recieved form addr: {addr}")
+        conn, addr = server.accept()
 
-    message = conn.recv(1024).decode()
-    print(f"recieved message: {message}")
+        print(f"server recieved form addr: {addr}")
 
-    conn.sendall(b"Hello from server")
+        message = conn.recv(1024).decode()
 
-    conn.close()
-    server.close()
+        if (message):
+            print(f"recieved message: {message}")
+
+            conn.sendall(b"Hello from server")
+
+        conn.close()
 
 def run_client():
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_ip = "client1"
 
-    server_ip = "172.20.0.2"
+    while True:
+        try:
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
-    print(f"connecting to {server_ip}:{PORT}")
+            print(f"connecting to {server_ip}:{PORT}")
 
-    client.connect((server_ip, PORT))
+            client.connect((server_ip, PORT))
 
-    client.sendall(b"hello form client2")
-    response = client.recv(1024).decode()
+            client.sendall(b"hello form client2")
+            response = client.recv(1024).decode()
 
-    print(f"recieved : {response}")
-    client.close()
+            print(f"recieved : {response}")
+            client.close()
+
+        except Exception as e:
+            print(f"connection failed: {e}")
+
+        time.sleep(5)
+
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
@@ -45,8 +61,10 @@ if __name__ == "__main__":
 
     if sys.argv[1] == "server":
         run_server()
+
     elif sys.argv[1] == "client":
         run_client()
+        
     else:
         print("invalid mode")
     
