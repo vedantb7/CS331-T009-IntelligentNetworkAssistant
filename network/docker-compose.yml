@@ -33,6 +33,18 @@ services:
       project-net:
         ipv4_address: 172.20.0.4
 
+
+  network-controller:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: network-controller
+    hostname: network-controller
+    privileged: true
+    network_mode: host
+    command: ["sleep", "infinity"]
+
+
 networks:
   project-net:
     driver: bridge

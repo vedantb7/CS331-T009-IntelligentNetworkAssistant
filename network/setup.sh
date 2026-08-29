@@ -52,7 +52,7 @@ echo "previous containers removed."
 echo 
 echo "[3/6] checking for leftover network..."
 
-PROJECT_NETWORK="network_projct-net"
+PROJECT_NETWORK="network_project-net"
 
 if docker network inspect "$PROJECT_NETWORK" &> /dev/null; then
     echo "Removing leftover network: $PROJECT_NETWORK"
@@ -81,7 +81,13 @@ echo "[5/6] checking containers and ip addr..."
 echo
 echo "--- Container status ---"
 
-docker compose ps
+for container in client1 client2 server network-controller; do 
+    if docker ps --format '{{.Names}}' | grep -q "^${container}$"; then 
+        echo "SUCCESS: $container is running." 
+    else echo "ERROR: $container is not running." 
+    exit 1 
+    fi 
+done
 
 echo 
 echo "--- ip addr ---"
