@@ -1,7 +1,9 @@
 services:
 
   server:
-    image: python:3.12-slim
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: server
     hostname: server
     command: ["python3", "-m", "http.server", "5000"]
@@ -10,7 +12,9 @@ services:
         ipv4_address: 172.20.0.3
 
   client1: 
-    image: python:3.12-slim
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: client1
     hostname: client1
     command: ["sleep", "infinity"]
@@ -19,7 +23,9 @@ services:
           ipv4_address: 172.20.0.2
 
   client2:
-    image: python:3.12-slim
+    build: 
+      context: .
+      dockerfile: Dockerfile
     container_name: client2
     hostname: client2
     command: ["sleep", "infinity"]

@@ -68,7 +68,7 @@ fi
 echo
 echo "[4/6] starting docker environment..."
 
-docker compose up -d
+docker compose up -d --build
 echo "Docker environment started."
 
 # ------------------------------------------ 
@@ -137,6 +137,34 @@ else
     echo "ERROR: client1 cant resolve client2"
     exit 1
 fi
+
+# ------------------------------------------ 
+# ICMP connectivity tests 
+# ------------------------------------------
+
+echo 
+echo "--- ICMP connectivity tests ---"
+
+echo 
+echo "testing client1 -> server..."
+
+if docker exec client1 ping -c 3 -W 2 server &> /dev/null; then
+    echo "SUCCESS: client1 -> server (ICMP)"
+else 
+    echo "ERROR: client1 cannot ping server"
+    exit 1
+fi
+
+echo 
+echo "testing client2 -> server..."
+
+if docker exec client2 ping -c 3 -W 2 server &> /dev/null; then
+    echo "SUCCESS: client2 -> server (ICMP)"
+else 
+    echo "ERROR: client2 cannot ping server"
+    exit 1
+fi
+
 
 echo 
 echo "==========================================" 
