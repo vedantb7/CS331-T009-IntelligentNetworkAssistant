@@ -5,10 +5,9 @@ WORKDIR /app
 RUN apt-get update && \ 
     apt-get install -y \ 
         iproute2 \ 
-        iputils-ping \ 
+        iputils-ping \
+        iperf3 \ 
         net-tools && \ 
     rm -rf /var/lib/apt/lists/*
-
-COPY client.py .
 
 CMD ["python3", "-u", "client.py"]
