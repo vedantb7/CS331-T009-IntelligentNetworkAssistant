@@ -12,8 +12,7 @@ Here is an overview of the key files and directories in this project:
 ina/
 ├── docs/                             # Project documentation
 │   ├── README.md                     # Main documentation entry point (this file)
-│   ├── network-architecture.md       # Detailed topology & network layout
-│   ├── setup-and-installation.md     # Installation, setup, running & troubleshooting
+│   ├── network.md                    # Combined network architecture, setup, and installation guide
 │   └── network-baseline.md           # Baseline verification & test results
 ├── network/                          # Network environment & services
 │   ├── Dockerfile                    # Container definition with networking utilities
@@ -34,7 +33,7 @@ The network topology consists of a custom bridge network (`project-net`) hosting
 3. **`client2` (`172.20.0.4`)**: A second client node in the same subnet.
 4. **`network-controller` (Host Mode)**: Runs with privileged status and host network access, intended for network control, routing management, and traffic monitoring actions.
 
-For detailed architecture and interface configuration details, see [Network Architecture](network-architecture.md).
+For detailed architecture and interface configuration details, see the [Network Documentation](network.md).
 
 ---
 
@@ -47,4 +46,4 @@ cd network
 ./setup.sh
 ```
 
-For full installation prerequisites, step-by-step setup guides, and troubleshooting instructions, see [Setup & Installation Guide](setup-and-installation.md).
+For full installation prerequisites, step-by-step setup guides, and troubleshooting instructions, see the [Network Documentation](network.md).
