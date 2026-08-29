@@ -6,12 +6,19 @@ import subprocess
 import json
 from validation.models import ValidationRequest, ValidationResult
 
+import re
+
 CLIENT_IPS = {
     "client1": "172.20.0.2",
     "client2": "172.20.0.4",
     "server": "172.20.0.3"
 }
 
+PING_COUNT = 3
+PING_TIMEOUT = 1
+PING_REQUIRED_SUCCESS = 2
+
+BANDWIDTH_TEST_DURATION = 5
 BANDWIDTH_TOLERANCE = 0.20
 
 def get_ip(client):
@@ -21,58 +28,107 @@ def get_ip(client):
 
 def run_ping(target_ip):
     result = subprocess.run(
-        ["ping", "-c", "3", "-W", "1", target_ip],
+        [
+            "ping",
+            "-c",
+            str(PING_COUNT),
+            "-W",
+            str(PING_TIMEOUT),
+            target_ip,
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True
+        text=True,
     )
-    return result.returncode == 0
+
+    output = result.stdout + result.stderr
+
+    packet_loss = parse_packet_loss(output)
+
+    return {
+        "reachable": result.returncode == 0,
+        "packet_loss": packet_loss,
+        "output": output,
+    }
 
 def check_block(client):
     target_ip = get_ip(client)
-    reachable = run_ping(target_ip)
 
-    if reachable:
+    ping_result = run_ping(target_ip)
+
+    packet_loss = ping_result["packet_loss"]
+
+    if packet_loss is None:
         return ValidationResult(
             operation="BLOCK",
             client=client,
             target_ip=target_ip,
-            ping="SUCCESS",
+            ping="UNKNOWN",
             passed=False,
-            message=f"{client} is still reachable."
+            message="Unable to determine packet loss.",
+        )
+
+    passed = packet_loss >= 100.0
+
+    if passed:
+        message = (
+            f"{client} is successfully blocked."
         )
     else:
-        return ValidationResult(
-            operation="BLOCK",
-            client=client,
-            target_ip=target_ip,
-            ping="FAILED",
-            passed=True,
-            message=f"{client} is successfully blocked."
+        message = (
+            f"{client} is still reachable. "
+            f"Packet loss: {packet_loss:.1f}%."
         )
+
+    return ValidationResult(
+        operation="BLOCK",
+        client=client,
+        target_ip=target_ip,
+        ping=(
+            f"{packet_loss:.1f}% packet loss"
+        ),
+        passed=passed,
+        message=message,
+    )
 
 def check_unblock(client):
     target_ip = get_ip(client)
-    reachable = run_ping(target_ip)
 
-    if reachable:
+    ping_result = run_ping(target_ip)
+
+    packet_loss = ping_result["packet_loss"]
+
+    if packet_loss is None:
         return ValidationResult(
             operation="UNBLOCK",
             client=client,
             target_ip=target_ip,
-            ping="SUCCESS",
-            passed=True,
-            message=f"{client} is successfully unblocked."
+            ping="UNKNOWN",
+            passed=False,
+            message="Unable to determine packet loss.",
+        )
+
+    passed = packet_loss < 100.0
+
+    if passed:
+        message = (
+            f"{client} is successfully unblocked."
         )
     else:
-        return ValidationResult(
-            operation="UNBLOCK",
-            client=client,
-            target_ip=target_ip,
-            ping="FAILED",
-            passed=False,
-            message=f"{client} is still unreachable."
+        message = (
+            f"{client} is still unreachable."
         )
+
+    return ValidationResult(
+        operation="UNBLOCK",
+        client=client,
+        target_ip=target_ip,
+        ping=(
+            f"{packet_loss:.1f}% packet loss"
+        ),
+        passed=passed,
+        message=message,
+    )
 
 def parse_rate(rate):
     rate = rate.lower().strip()
@@ -150,6 +206,17 @@ def print_result(result: ValidationResult):
 
     print("Result: " + ("PASS" if result.passed else "FAIL"))
     print(f"Message: {result.message}")
+
+def parse_packet_loss(output):
+    match = re.search(
+        r"(\d+(?:\.\d+)?)%\s*packet loss",
+        output,
+    )
+
+    if not match:
+        return None
+
+    return float(match.group(1))
 
 def main():
     try:
