@@ -1,0 +1,23 @@
+# policy/rules.yaml
+# The rulebook that check_policy() reads to decide ALLOW or DENY.
+
+# Clients that can never be blocked or bandwidth-limited.
+protected_clients:
+  - server
+
+# Any bandwidth request must fall within this range.
+bandwidth:
+  minimum: 1mbit
+  maximum: 20mbit
+
+# The only actions the system is allowed to perform at all.
+allowed_actions:
+  - block_client
+  - unblock_client
+  - limit_bandwidth
+
+# Client names that actually exist in the Docker network.
+known_clients:
+  - client1
+  - client2
+  - server
