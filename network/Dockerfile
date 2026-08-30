@@ -7,7 +7,10 @@ RUN apt-get update && \
         iproute2 \ 
         iputils-ping \
         iperf3 \ 
-        net-tools && \ 
+        net-tools \
+        iptables \
+        kmod \
+        procps && \ 
     rm -rf /var/lib/apt/lists/*
 
 CMD ["python3", "-u", "client.py"]

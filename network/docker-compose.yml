@@ -49,6 +49,8 @@ services:
     privileged: true
     network_mode: host
     command: ["sleep", "infinity"]
+    volumes:
+      - /lib/modules:/lib/modules:ro
 
 
 networks:
