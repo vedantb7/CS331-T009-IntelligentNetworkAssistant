@@ -69,3 +69,12 @@ class ValidationResult(BaseModel):
 
     passed: bool
     message: str
+
+    @model_validator(mode="after")
+    def validate_bandwidth_fields(self):
+        if self.operation == "BANDWIDTH":
+            if self.expected_rate is None or self.measured_rate is None or self.tolerance is None:
+                raise ValueError(
+                    "Bandwidth results require expected_rate, measured_rate, and tolerance."
+                )
+        return self
