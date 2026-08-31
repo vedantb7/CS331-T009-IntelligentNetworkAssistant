@@ -26,9 +26,32 @@ def get_ip(client):
         raise ValueError(f"Unknown client: {client}")
     return CLIENT_IPS[client]
 
-def run_ping(target_ip):
+def pick_source_container(target_client):
+    """
+    Choose another container on the network to ping FROM.
+
+    This matters more than it looks: block_client()/unblock_client() insert
+    rules into the DOCKER-USER chain, which is a FORWARD-chain hook — it
+    only inspects traffic being routed *between* networks/containers. A
+    ping issued directly from the host (or from a host-networked container
+    like network-controller) is host-originated OUTPUT traffic and never
+    passes through DOCKER-USER at all, so it would report "reachable"
+    regardless of whether the block actually worked. Pinging from one
+    container to another forces the traffic across the bridge, where the
+    block rule is actually enforced — the same reason check_bandwidth()
+    already runs iperf3 via `docker exec` instead of from the host.
+    """
+    for candidate in ("server", "client1", "client2"):
+        if candidate != target_client and candidate in CLIENT_IPS:
+            return candidate
+    raise ValueError(f"No available source container to ping from for target '{target_client}'.")
+
+def run_ping(source_container, target_ip):
     result = subprocess.run(
         [
+            "docker",
+            "exec",
+            source_container,
             "ping",
             "-c",
             str(PING_COUNT),
@@ -53,8 +76,9 @@ def run_ping(target_ip):
 
 def check_block(client):
     target_ip = get_ip(client)
+    source = pick_source_container(client)
 
-    ping_result = run_ping(target_ip)
+    ping_result = run_ping(source, target_ip)
 
     packet_loss = ping_result["packet_loss"]
 
@@ -93,8 +117,9 @@ def check_block(client):
 
 def check_unblock(client):
     target_ip = get_ip(client)
+    source = pick_source_container(client)
 
-    ping_result = run_ping(target_ip)
+    ping_result = run_ping(source, target_ip)
 
     packet_loss = ping_result["packet_loss"]
 

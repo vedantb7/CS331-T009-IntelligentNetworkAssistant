@@ -51,6 +51,9 @@ services:
     command: ["sleep", "infinity"]
     volumes:
       - /lib/modules:/lib/modules:ro
+      - ..:/app
+      - /var/run/docker.sock:/var/run/docker.sock
+    working_dir: /app
 
 
 networks:

@@ -1,0 +1,10 @@
+{"timestamp": "2026-08-30T14:42:41", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-30T14:42:41", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
+{"timestamp": "2026-08-30T14:50:09", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-30T14:50:09", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
+{"timestamp": "2026-08-30T14:51:00", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-30T14:51:00", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
+{"timestamp": "2026-08-30T14:58:58", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-30T14:58:58", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
+{"timestamp": "2026-08-30T15:03:33", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-08-30T15:03:33", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}

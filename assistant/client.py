@@ -461,6 +461,33 @@ else:
     INTEGRATION_STATUS["validation_monitor"] = "mock"
 
 
+# --- 2d. Khushi's Audit Log -------------------------------------------
+# Not strictly part of the original pipeline diagram, but Khushi built a
+# small, self-contained audit trail (policy/audit_log.py) that was sitting
+# unused. It has no interface mismatch to adapt — log_action() already
+# takes exactly the shape the orchestrator has on hand — so we just wire
+# it straight in. Entirely optional: if it's missing, the pipeline runs
+# exactly as before, just without a persisted history of decisions.
+try:
+    from policy.audit_log import log_action as _real_log_action  # type: ignore
+
+    INTEGRATION_STATUS["audit_log"] = "real"
+except ImportError:
+    _real_log_action = None
+    INTEGRATION_STATUS["audit_log"] = "not connected"
+
+
+def _audit(action: ActionType, params: Dict[str, Any], status: str, reason: str = "") -> None:
+    """Best-effort audit logging — never let a logging problem take down
+    the actual pipeline, so any failure here is swallowed silently."""
+    if _real_log_action is None:
+        return
+    try:
+        _real_log_action(action.value, params, status, reason)
+    except Exception:
+        pass
+
+
 class MockValidationMonitor:
     """
     Stand-in for Dhruv's validation/monitor.py.
@@ -544,6 +571,17 @@ class ValidationMonitorAdapter:
             # RuntimeError for iperf3/parsing failures — turn both into a
             # clean, non-crashing validation failure instead of propagating.
             return {"success": False, "summary": f"Validation error: {exc}"}
+
+        # Dhruv's functions now return a Pydantic `ValidationResult` model
+        # (attribute access: .passed, .message, ...) rather than a plain
+        # dict. Normalize both shapes into a dict here so the rest of this
+        # method doesn't care which one it got.
+        if hasattr(raw, "model_dump"):
+            raw = raw.model_dump()  # Pydantic v2
+        elif hasattr(raw, "dict") and callable(raw.dict):
+            raw = raw.dict()  # Pydantic v1 fallback
+        elif not isinstance(raw, dict):
+            raw = vars(raw)
 
         return {
             "success": bool(raw.get("passed", False)),
@@ -963,6 +1001,12 @@ class NetworkAssistant:
 
         decision = await self._evaluate_policy(intent)
         report["policy"] = {"allowed": decision.allowed, "reason": decision.reason, "rule_id": decision.rule_id}
+        _audit(
+            intent.action,
+            {"client": intent.target, **intent.params},
+            "ALLOWED" if decision.allowed else "DENIED",
+            decision.reason,
+        )
 
         if not decision.allowed:
             report["halted_at"] = "policy"
@@ -975,6 +1019,13 @@ class NetworkAssistant:
             "message": execution.message,
             "details": execution.details,
         }
+        if execution.success:
+            _audit(
+                intent.action,
+                {"client": intent.target, **intent.params},
+                "APPLIED",
+                execution.message,
+            )
 
         if not execution.success:
             report["halted_at"] = "execution"
@@ -1005,6 +1056,7 @@ def print_startup_banner() -> None:
         f"Policy Engine (Khushi):      {INTEGRATION_STATUS['policy_engine'].upper()}",
         f"MCP Tools (Vedant):          {INTEGRATION_STATUS['mcp_tools'].upper()}{mcp_note}",
         f"Validation Monitor (Dhruv):  {INTEGRATION_STATUS['validation_monitor'].upper()}",
+        f"Audit Log (Khushi):          {INTEGRATION_STATUS['audit_log'].upper()}",
     ]
     body = "\n".join(lines)
     if RICH_AVAILABLE:

@@ -10,7 +10,8 @@ RUN apt-get update && \
         net-tools \
         iptables \
         kmod \
-        procps && \ 
+        procps \
+        docker.io && \
     rm -rf /var/lib/apt/lists/*
 
 CMD ["python3", "-u", "client.py"]

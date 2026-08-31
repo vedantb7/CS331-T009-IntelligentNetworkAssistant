@@ -1,1 +1,16 @@
-pydantic
+# Core dependencies required to run assistant/client.py end-to-end
+pyyaml         # policy/policy_engine.py reads rules.yaml
+rich           # assistant/client.py terminal formatting (falls back to plain text if missing)
+pydantic       # validation/models.py request/result schemas
+
+# Optional: only needed if you want LLM-backed intent parsing instead of
+# the built-in regex fallback. Install whichever one you have an API key
+# for; the assistant tries them in this order (litellm -> anthropic -> openai).
+# litellm
+# anthropic
+# openai
+
+# Optional: only needed to run mcp_server/server.py as a standalone
+# FastMCP server process (not required for the direct-import path
+# assistant/client.py uses today).
+# fastmcp
