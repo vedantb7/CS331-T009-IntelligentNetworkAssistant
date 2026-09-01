@@ -225,6 +225,96 @@ Inside the containers, a custom Python TCP script (`client.py`) is copied to `/a
 
 ---
 
+### 🛡️ Manual Policy Control Testing (`block`, `unblock`, `limit_bandwidth`)
+
+You can test network policies manually from the host terminal using `docker exec` commands targeting `iptables` on `network-controller` and `tc` on client containers.
+
+#### 0. Enable Host Bridge Netfilter (Prerequisite)
+To allow host `iptables` rules on `network-controller` to filter Layer 2 container bridge traffic:
+* **Terminal Command**:
+  ```bash
+  docker exec network-controller modprobe br_netfilter
+  ```
+* **Intended Result**: Loads the `br_netfilter` kernel module enabling `iptables` to process bridged Docker traffic.
+
+---
+
+#### 1. Testing `block` Manually (Firewall Rule)
+Block all outbound traffic originating from `client1` (`172.20.0.2`):
+
+* **Terminal Commands**:
+  ```bash
+  # Apply DROP rule on network-controller for client1 IP
+  docker exec network-controller iptables -I DOCKER-USER -s 172.20.0.2 -j DROP
+
+  # Inspect rule in DOCKER-USER chain
+  docker exec network-controller iptables -L DOCKER-USER -n -v --line-numbers
+
+  # Test connectivity from blocked container
+  docker exec client1 ping -c 4 -W 1 172.20.0.4
+  ```
+
+* **Intended Result**:
+  * The `DOCKER-USER` chain displays line 1: `DROP all -- 172.20.0.2 everywhere`.
+  * `ping` from `client1` to `client2` or `server` fails with **100% packet loss**.
+  * The packet/byte counter for rule 1 in `iptables -L DOCKER-USER -n -v` increases with each dropped packet attempt.
+
+---
+
+#### 2. Testing `unblock` Manually (Firewall Rule Removal)
+Remove the DROP rule to restore full network communication for `client1`:
+
+* **Terminal Commands**:
+  ```bash
+  # Delete DROP rule (rule #1) from DOCKER-USER chain
+  docker exec network-controller iptables -D DOCKER-USER 1
+
+  # Verify chain is empty / rule removed
+  docker exec network-controller iptables -L DOCKER-USER -n -v --line-numbers
+
+  # Verify connectivity from client1
+  docker exec client1 ping -c 4 172.20.0.4
+  ```
+
+* **Intended Result**:
+  * The `DROP` rule is deleted from the `DOCKER-USER` chain.
+  * `ping` from `client1` to `client2` or `server` succeeds with **0% packet loss**.
+  * Complete network connectivity is restored.
+
+---
+
+#### 3. Testing `limit_bandwidth` Manually (`tc` Traffic Control)
+Apply a Token Bucket Filter (`tbf`) queuing discipline on interface `eth0` of `client1` to throttle outbound bandwidth to **5 Mbps**:
+
+* **Terminal Commands**:
+  ```bash
+  # Start iperf3 server daemon on server node (if not already active)
+  docker exec -d server iperf3 -s
+
+  # Test baseline throughput prior to restriction
+  docker exec client1 iperf3 -c 172.20.0.3 -t 10
+
+  # Apply 5 Mbps bandwidth limit on client1 eth0
+  docker exec client1 tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
+
+  # Verify active tc queuing discipline configuration
+  docker exec client1 tc qdisc show dev eth0
+
+  # Measure throttled bandwidth
+  docker exec client1 iperf3 -c 172.20.0.3 -t 10
+
+  # Remove bandwidth limitation (reset queuing discipline)
+  docker exec client1 tc qdisc del dev eth0 root
+  ```
+
+* **Intended Result**:
+  * **Baseline**: Unthrottled bandwidth achieves high speed (>10 Gbps).
+  * **qdisc Configuration**: `tc qdisc show` reports `qdisc tbf ... rate 5Mbit burst 4Kb lat 400ms`.
+  * **Throttled Benchmark**: `iperf3` transfer rate drops from >10 Gbps down to **~4.5 – 5.5 Mbps**.
+  * **Removal**: Deleting root `qdisc` restores throughput back to full unthrottled baseline speed (>10 Gbps).
+
+---
+
 ### 📊 Baseline Network Verification & Diagnostic Outputs
 
 #### Connectivity Matrix & Verification
