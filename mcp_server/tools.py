@@ -6,89 +6,90 @@ CLIENT_IPS = {
     "client2": "172.20.0.4"
 }
 
-#Function to block a client
+# Function to block a client
 def block_client(client: str) -> dict:
     try:
         if client not in CLIENT_IPS:
             return {
-                "status" : "failure",
-                "action" : "block_client",
-                "client" : client,
-                "message" : f"Client {client} not found in the network."
+                "status": "failure",
+                "action": "block_client",
+                "client": client,
+                "message": f"Client {client} not found in the network."
             }
 
-        client_ip = CLIENT_IPS[client] #Retrieve the client IP from Mapping
+        client_ip = CLIENT_IPS[client]
 
         command = [
+            "docker", "exec", "network-controller",
             "iptables", "-I", "DOCKER-USER",
             "-s", client_ip, "-j", "DROP"
         ]
+
         result = subprocess.run(
-            command,   #Runs system command, -A means Append
-            capture_output = True,   #Capture the output
-            check = False, #Avoid raising unecessary exception
-            text = True,   #Return output as normal text
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
         )
 
-        if(result.returncode == 0):
+        if result.returncode == 0:
             return {
-            "status" : "success",
-            "action" : "block_client",
-            "client" : client,
-            "message": f"Client {client} blocked successfully."
-        }
+                "status": "success",
+                "action": "block_client",
+                "client": client,
+                "message": f"Client {client} blocked successfully."
+            }
 
-        #Handling Failure of Blocking
         return {
-            "status" : "failure",
-            "action" : "block_client",
-            "client" : client,
-            "message" : result.stderr.strip()
-        }
-    #Handle the case where the command is not found
-    except FileNotFoundError:
-        return{
-            "status" : "failure",
-            "action" : "block_client",
-            "client" : client,
-            "message" : "Command not found. Please ensure the command is available on the system."
+            "status": "failure",
+            "action": "block_client",
+            "client": client,
+            "message": result.stderr.strip()
         }
 
-    #Catch any other error
+    except FileNotFoundError:
+        return {
+            "status": "failure",
+            "action": "block_client",
+            "client": client,
+            "message": "Docker command not found. Please ensure Docker is running and available in PATH."
+        }
+
     except Exception as error:
         return {
-            "status" : "failure",
-            "action" : "block_client",
-            "client" : client,
-            "message" : str(error)
-        }
-
-#Function to unblock a client
-def unblock_client(client: str) -> dict:
-    if client not in CLIENT_IPS:
-        return{
             "status": "failure",
-            "action": "unblock_client",
+            "action": "block_client",
             "client": client,
-            "message": f"Client {client} not found in the network."
+            "message": str(error)
         }
 
-    client_ip = CLIENT_IPS[client]
-
+# Function to unblock a client
+def unblock_client(client: str) -> dict:
     try:
+        if client not in CLIENT_IPS:
+            return {
+                "status": "failure",
+                "action": "unblock_client",
+                "client": client,
+                "message": f"Client {client} not found in the network."
+            }
+
+        client_ip = CLIENT_IPS[client]
+
         command = [
+            "docker", "exec", "network-controller",
             "iptables", "-D", "DOCKER-USER",
             "-s", client_ip, "-j", "DROP"
         ]
-        
+
         result = subprocess.run(
-            command, #-D Means Delete
-            capture_output = True,
-            text = True,
-            check = False
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
         )
 
-        if(result.returncode == 0):
+        if result.returncode == 0:
             return {
                 "status": "success",
                 "action": "unblock_client",
@@ -96,29 +97,28 @@ def unblock_client(client: str) -> dict:
                 "message": f"Client {client} unblocked successfully."
             }
 
-        #Failure Handling
-        return{
+        return {
             "status": "failure",
             "action": "unblock_client",
             "client": client,
             "message": result.stderr.strip()
         }
-    
+
     except FileNotFoundError:
         return {
             "status": "failure",
             "action": "unblock_client",
             "client": client,
-            "message": "iptables command not found."
+            "message": "Docker command not found. Please ensure Docker is running and available in PATH."
         }
-    
+
     except Exception as error:
         return {
             "status": "failure",
             "action": "unblock_client",
             "client": client,
             "message": str(error)
-        }    
+        }
         
 def limit_bandwidth(client: str, rate: str) -> dict:
     if client not in CLIENT_IPS:

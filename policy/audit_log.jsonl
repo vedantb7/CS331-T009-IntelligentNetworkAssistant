@@ -8,3 +8,14 @@
 {"timestamp": "2026-08-30T14:58:58", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
 {"timestamp": "2026-08-30T15:03:33", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
 {"timestamp": "2026-08-30T15:03:33", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-08-31T12:44:46", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-31T18:20:55", "action": "get_status", "params": {"client": "client1"}, "status": "DENIED", "reason": "Action 'get_status' is not in the list of allowed actions."}
+{"timestamp": "2026-08-31T18:33:05", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-31T18:33:55", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-31T18:44:06", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-31T18:47:38", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-08-31T18:47:38", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully."}
+{"timestamp": "2026-09-01T10:13:48", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-01T10:13:48", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-01T10:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 5, "rate": "5mbit"}, "status": "ALLOWED", "reason": "5.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-01T10:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 5, "rate": "5mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 5mbit successfully."}

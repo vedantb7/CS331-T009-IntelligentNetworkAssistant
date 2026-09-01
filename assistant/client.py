@@ -58,6 +58,9 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # 0. TERMINAL OUTPUT — rich with a graceful plain-text fallback
@@ -608,11 +611,41 @@ Rules:
 - Always normalize the target to lowercase snake_case (e.g. "Management Server" -> "management_server").
 - For limit_bandwidth, extract the numeric Mbps value into params.rate_mbps.
 - Output valid JSON and nothing else.
+
+The person will very often NOT use the technical words "block" / "unblock" / "limit".
+They'll describe what they want in plain, everyday language. Map it to the closest
+action using its intent, not its wording. For example:
+- "cut client1 off the network" / "kick client1 off wifi" / "kill client1's internet"
+  -> block_client, target "client1"
+- "let client2 back on" / "restore client2's internet" / "client2 can connect again"
+  -> unblock_client, target "client2"
+- "slow client1 down to 5mbps" / "cap client1's speed at 5 megabits" / "throttle client1 to 5"
+  -> limit_bandwidth, target "client1", params.rate_mbps 5
+- "is client3 online" / "check on client3" / "what's client3 doing"
+  -> get_status, target "client3"
+"""
+
+RESPONSE_SYSTEM_PROMPT = """You are the natural-language voice of a network \
+automation assistant called INA. You are given a JSON "pipeline report" \
+describing one request a user made in plain English, and what the system \
+did about it (an intent-parsing stage, a policy check, an execution step \
+against the network, and a validation/confirmation step).
+
+Write a short reply (2-4 sentences, plain text, no markdown, no JSON) as if \
+you were the assistant talking directly to the user. It must:
+- Restate, in your own words, what the user asked for.
+- Clearly say what actually happened: was it allowed or blocked by policy?
+  If executed, did it succeed? Was it confirmed by validation?
+- If anything failed or was denied, say why in plain terms (not raw errors).
+- Avoid jargon (iptables, tc, MCP, JSON) unless there's no simpler way to say it.
+- Be direct and concise — this is a status update, not a chat.
+
+Output ONLY the reply text, nothing else.
 """
 
 
-def _try_litellm(user_text: str) -> Optional[str]:
-    """Attempt structured parsing via LiteLLM (provider-agnostic)."""
+def _try_litellm(system_prompt: str, user_text: str, max_tokens: int = 300) -> Optional[str]:
+    """Attempt a structured completion via LiteLLM (provider-agnostic)."""
     try:
         import litellm  # type: ignore
     except ImportError:
@@ -624,10 +657,10 @@ def _try_litellm(user_text: str) -> Optional[str]:
         resp = litellm.completion(
             model=model,
             messages=[
-                {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},
             ],
-            max_tokens=300,
+            max_tokens=max_tokens,
             temperature=0,
         )
         return resp["choices"][0]["message"]["content"]
@@ -635,8 +668,8 @@ def _try_litellm(user_text: str) -> Optional[str]:
         return None
 
 
-def _try_anthropic(user_text: str) -> Optional[str]:
-    """Attempt structured parsing via the Anthropic SDK."""
+def _try_anthropic(system_prompt: str, user_text: str, max_tokens: int = 300) -> Optional[str]:
+    """Attempt a structured completion via the Anthropic SDK."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         return None
@@ -649,8 +682,8 @@ def _try_anthropic(user_text: str) -> Optional[str]:
         model = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-5")
         resp = client.messages.create(
             model=model,
-            max_tokens=300,
-            system=LLM_SYSTEM_PROMPT,
+            max_tokens=max_tokens,
+            system=system_prompt,
             messages=[{"role": "user", "content": user_text}],
         )
         # Concatenate any text blocks in the response.
@@ -659,30 +692,54 @@ def _try_anthropic(user_text: str) -> Optional[str]:
         return None
 
 
-def _try_openai(user_text: str) -> Optional[str]:
-    """Attempt structured parsing via the OpenAI SDK."""
-    api_key = os.environ.get("OPENAI_API_KEY")
+def _try_openai(system_prompt: str, user_text: str, max_tokens: int = 300) -> Optional[str]:
+    """Call an OpenRouter model using the OpenAI-compatible SDK."""
+    api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key:
         return None
+
     try:
-        from openai import OpenAI  # type: ignore
+        from openai import OpenAI
     except ImportError:
         return None
+
     try:
-        client = OpenAI(api_key=api_key)
-        model = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+        client = OpenAI(
+            api_key=api_key,
+            base_url="https://openrouter.ai/api/v1",
+        )
+
+        model = os.environ.get(
+            "OPENROUTER_MODEL",
+            "google/gemini-2.5-flash",
+        )
+
         resp = client.chat.completions.create(
             model=model,
             temperature=0,
-            max_tokens=300,
+            max_tokens=max_tokens,
             messages=[
-                {"role": "system", "content": LLM_SYSTEM_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_text},
             ],
         )
+
         return resp.choices[0].message.content
-    except Exception:
+
+    except Exception as exc:
+        print(f"[OpenRouter error] {exc}", file=sys.stderr)
         return None
+
+
+def _call_llm(system_prompt: str, user_text: str, max_tokens: int = 300) -> Optional[str]:
+    """Try each configured LLM backend in turn for a generic completion;
+    return the first non-empty response, or None if nothing is configured
+    / everything failed. Shared by intent parsing and response synthesis."""
+    for backend in (_try_litellm, _try_anthropic, _try_openai):
+        raw = backend(system_prompt, user_text, max_tokens)
+        if raw:
+            return raw
+    return None
 
 
 def _extract_json(text: str) -> Optional[Dict[str, Any]]:
@@ -711,31 +768,85 @@ def _normalize_target(raw: str) -> str:
 
 
 def llm_parse(text: str) -> Optional[Intent]:
-    """Try each configured LLM backend in turn; return the first success."""
-    for backend in (_try_litellm, _try_anthropic, _try_openai):
-        raw = backend(text)
-        if raw is None:
-            continue
-        data = _extract_json(raw)
-        if not data:
-            continue
-        try:
-            action = ActionType(data.get("action", "unknown"))
-        except ValueError:
-            action = ActionType.UNKNOWN
-        target = _normalize_target(str(data.get("target", "")))
-        params = data.get("params") or {}
-        if "rate_mbps" in params and "rate" not in params:
-            params["rate"] = f"{params['rate_mbps']}mbit"
-        return Intent(
-            action=action,
-            target=target,
-            params=params,
-            raw_text=text,
-            confidence=0.9,
-            parser_used="llm",
+    """Ask the configured LLM backend to translate free-form, layman
+    language into a structured Intent. Returns None if no backend is
+    configured, or if the response couldn't be parsed as valid JSON —
+    in either case the caller falls back to the regex parser."""
+    raw = _call_llm(LLM_SYSTEM_PROMPT, text, max_tokens=300)
+    if raw is None:
+        return None
+    data = _extract_json(raw)
+    if not data:
+        return None
+    try:
+        action = ActionType(data.get("action", "unknown"))
+    except ValueError:
+        action = ActionType.UNKNOWN
+    target = _normalize_target(str(data.get("target", "")))
+    params = data.get("params") or {}
+    if "rate_mbps" in params and "rate" not in params:
+        params["rate"] = f"{params['rate_mbps']}mbit"
+    return Intent(
+        action=action,
+        target=target,
+        params=params,
+        raw_text=text,
+        confidence=0.9,
+        parser_used="llm",
+    )
+
+
+def synthesize_natural_response(report: Dict[str, Any]) -> str:
+    """The 'AI agent' voice at the END of the pipeline: turns the technical
+    report (intent parsed, policy decision, execution result, validation
+    result) into a short, plain-English status update for the user.
+
+    Falls back to a deterministic, template-built summary if no LLM
+    backend is configured (or the call fails), so the CLI always produces
+    a readable final answer — never a bare technical dump."""
+    payload = json.dumps(report, default=str)
+    reply = _call_llm(RESPONSE_SYSTEM_PROMPT, payload, max_tokens=220)
+    if reply:
+        return reply.strip()
+    return _template_response(report)
+
+
+def _template_response(report: Dict[str, Any]) -> str:
+    """Deterministic fallback used when no AI backend is available."""
+    intent = report["intent"]
+    target = intent.get("target") or "the target you mentioned"
+    action = intent.get("action", "unknown")
+
+    if report.get("halted_at") == "parsing":
+        return (
+            f"I wasn't able to figure out what you wanted from \"{report['raw_text']}\". "
+            "Could you rephrase it — e.g. 'block client1' or 'limit client1 to 5 Mbps'?"
         )
-    return None
+
+    policy = report.get("policy") or {}
+    if report.get("halted_at") == "policy":
+        return (
+            f"I understood you want to {action.replace('_', ' ')} {target}, but policy "
+            f"blocked it: {policy.get('reason', 'no reason given')}."
+        )
+
+    execution = report.get("execution") or {}
+    if report.get("halted_at") == "execution":
+        return (
+            f"Policy approved {action.replace('_', ' ')} for {target}, but the change "
+            f"failed to apply: {execution.get('message', 'unknown error')}."
+        )
+
+    validation = report.get("validation") or {}
+    if validation:
+        confirmed = "and I've confirmed it on the network" if validation.get("success") else \
+            "but I couldn't fully confirm it on the network yet"
+        return (
+            f"Done — {action.replace('_', ' ')} for {target} was applied "
+            f"({execution.get('message', 'no details')}), {confirmed}: "
+            f"{validation.get('summary', '')}"
+        )
+    return f"Done — {action.replace('_', ' ')} for {target} was applied: {execution.get('message', '')}"
 
 
 # --- Regex fallback: deterministic, dependency-free, always available -----
@@ -997,6 +1108,7 @@ class NetworkAssistant:
                 "or 'Get status of client1'."
             )
             report["elapsed_sec"] = round(time.time() - started, 3)
+            report["natural_response"] = synthesize_natural_response(report)
             return report
 
         decision = await self._evaluate_policy(intent)
@@ -1011,6 +1123,7 @@ class NetworkAssistant:
         if not decision.allowed:
             report["halted_at"] = "policy"
             report["elapsed_sec"] = round(time.time() - started, 3)
+            report["natural_response"] = synthesize_natural_response(report)
             return report
 
         execution = await self._execute(intent)
@@ -1030,6 +1143,7 @@ class NetworkAssistant:
         if not execution.success:
             report["halted_at"] = "execution"
             report["elapsed_sec"] = round(time.time() - started, 3)
+            report["natural_response"] = synthesize_natural_response(report)
             return report
 
         validation = await self._validate(intent)
@@ -1040,12 +1154,26 @@ class NetworkAssistant:
         }
 
         report["elapsed_sec"] = round(time.time() - started, 3)
+        report["natural_response"] = synthesize_natural_response(report)
         return report
 
 
 # ---------------------------------------------------------------------------
 # 5. TERMINAL REPORTING
 # ---------------------------------------------------------------------------
+def _detect_ai_backend() -> str:
+    """Report which LLM backend (if any) is configured, so the operator
+    knows whether they're getting real AI-parsed intents + AI-written
+    replies, or the deterministic regex/template fallback."""
+    if os.environ.get("LITELLM_MODEL"):
+        return f"real (litellm:{os.environ['LITELLM_MODEL']})"
+    if os.environ.get("ANTHROPIC_API_KEY"):
+        return f"real (anthropic:{os.environ.get('ANTHROPIC_MODEL', 'claude-sonnet-4-5')})"
+    if os.environ.get("OPENROUTER_API_KEY"):
+        return f"real (openrouter:{os.environ.get('OPENROUTER_MODEL', 'google/gemini-2.0-flash-001')})"
+    return "mock (regex parser + template replies — set ANTHROPIC_API_KEY / OPENROUTER_API_KEY / LITELLM_MODEL)"
+
+
 def print_startup_banner() -> None:
     mcp_note = "  [mcp SDK detected]" if MCP_SDK_AVAILABLE else ""
     if INTEGRATION_STATUS["mcp_tools"].startswith("real") and not hasattr(
@@ -1053,6 +1181,7 @@ def print_startup_banner() -> None:
     ):
         mcp_note += "  [get_status pending from Vedant]"
     lines = [
+        f"AI Agent (parsing + reply):  {_detect_ai_backend().upper()}",
         f"Policy Engine (Khushi):      {INTEGRATION_STATUS['policy_engine'].upper()}",
         f"MCP Tools (Vedant):          {INTEGRATION_STATUS['mcp_tools'].upper()}{mcp_note}",
         f"Validation Monitor (Dhruv):  {INTEGRATION_STATUS['validation_monitor'].upper()}",
@@ -1077,10 +1206,27 @@ def print_report(report: Dict[str, Any]) -> None:
     terminal summary."""
     intent = report["intent"]
 
+    # Did the request fully succeed? Used to color the AI-agent reply panel.
+    overall_ok = (
+        report.get("halted_at") is None
+        and (report.get("validation") or {}).get("success", True)
+    )
+
     if RICH_AVAILABLE:
         console.rule(f"[bold]Request {report['request_id']}[/bold]")
-        console.print(f"[dim]Input:[/dim] \"{report['raw_text']}\"")
+        console.print(f"[dim]You said:[/dim] \"{report['raw_text']}\"")
 
+        # --- The AI agent's natural-language reply, shown first --------
+        reply_color = "green" if overall_ok else ("red" if report.get("halted_at") else "yellow")
+        console.print(
+            Panel.fit(
+                report.get("natural_response", "(no response generated)"),
+                title="[bold]INA[/bold]",
+                border_style=reply_color,
+            )
+        )
+
+        # --- Technical trace of the pipeline, for debugging/demo -------
         table = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold magenta")
         table.add_column("Stage")
         table.add_column("Result")
@@ -1094,7 +1240,7 @@ def print_report(report: Dict[str, Any]) -> None:
         if report.get("error"):
             table.add_row("[red]Error[/red]", report["error"])
             console.print(table)
-            console.print("[bold red]HALTED[/bold red]: could not parse a valid intent.\n")
+            console.print()
             return
 
         policy = report["policy"]
@@ -1106,13 +1252,7 @@ def print_report(report: Dict[str, Any]) -> None:
 
         if not policy["allowed"]:
             console.print(table)
-            console.print(
-                Panel.fit(
-                    policy["reason"],
-                    title="[bold red]Blocked by Policy Engine[/bold red]",
-                    border_style="red",
-                )
-            )
+            console.print()
             return
 
         execution = report["execution"]
@@ -1124,7 +1264,7 @@ def print_report(report: Dict[str, Any]) -> None:
 
         if not execution["success"]:
             console.print(table)
-            console.print("[bold red]HALTED[/bold red]: MCP execution failed.\n")
+            console.print()
             return
 
         validation = report["validation"]
@@ -1139,21 +1279,22 @@ def print_report(report: Dict[str, Any]) -> None:
     else:
         # Plain-text fallback for environments without rich installed.
         print(f"\n--- Request {report['request_id']} ---")
-        print(f'Input: "{report["raw_text"]}"')
-        print(f"Intent: {intent}")
+        print(f'You said: "{report["raw_text"]}"')
+        print(f"INA: {report.get('natural_response', '(no response generated)')}")
+        print(f"[trace] Intent: {intent}")
         if report.get("error"):
-            print(f"ERROR: {report['error']}")
+            print(f"[trace] ERROR: {report['error']}")
             return
         policy = report["policy"]
-        print(f"Policy: {'ALLOW' if policy['allowed'] else 'DENY'} - {policy['reason']}")
+        print(f"[trace] Policy: {'ALLOW' if policy['allowed'] else 'DENY'} - {policy['reason']}")
         if not policy["allowed"]:
             return
         execution = report["execution"]
-        print(f"Execution: {'OK' if execution['success'] else 'FAILED'} - {execution['message']}")
+        print(f"[trace] Execution: {'OK' if execution['success'] else 'FAILED'} - {execution['message']}")
         if not execution["success"]:
             return
         validation = report["validation"]
-        print(f"Validation: {'CONFIRMED' if validation['success'] else 'UNCONFIRMED'} - {validation['summary']}")
+        print(f"[trace] Validation: {'CONFIRMED' if validation['success'] else 'UNCONFIRMED'} - {validation['summary']}")
         print(f"Completed in {report['elapsed_sec']}s")
 
 
