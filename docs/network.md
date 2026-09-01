@@ -1,10 +1,30 @@
 # Intelligent Network Assistant (INA) - Network Documentation
 
-This document describes the network topology, IP assignments, interface configurations, and container services, as well as step-by-step instructions for installing dependencies, setting up, running, testing, and troubleshooting the network environment.
+Welcome to the comprehensive documentation for the **Intelligent Network Assistant (INA)** network environment. This document describes the network architecture, container services, setup and management procedures, baseline test verification measurements, and troubleshooting guides.
 
 ---
 
-## 🗺️ Topology Diagram
+## 📂 Project Structure
+
+Below is an overview of the key files and directories in this repository:
+
+```text
+ina/
+├── docs/                             # Project documentation
+│   ├── network.md                    # Main combined network architecture, setup, and baseline verification guide
+│   ├── README.md                     # Documentation entry point
+│   └── network-baseline.md           # Baseline verification & test results
+├── network/                          # Network environment & services
+│   ├── Dockerfile                    # Container definition with networking utilities
+│   ├── docker-compose.yml            # Multi-container service definitions
+│   ├── setup.sh                      # Shell script to automate checks, setup & tests
+│   └── client.py                     # Custom TCP client/server socket script
+└── README.md                         # Project landing page
+```
+
+---
+
+## 🗺️ Network Topology & Architecture
 
 The project establishes a containerized local area network (LAN) inside a bridge network, alongside a privileged controller operating on the host network stack.
 
@@ -30,9 +50,7 @@ graph TD
     end
 ```
 
----
-
-## 🎛️ Network Configuration
+### 🎛️ Network Configuration
 
 The network configuration details are defined in `network/docker-compose.yml`:
 
@@ -45,14 +63,15 @@ The network configuration details are defined in `network/docker-compose.yml`:
 
 ## 📦 Container Services & Assignments
 
-| Container | Hostname | IP Address | Network Mode | Privileged | Default Command / Process |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **`client1`** | `client1` | `172.20.0.2` | `project-net` | No | `sleep infinity` |
-| **`server`** | `server` | `172.20.0.3` | `project-net` | No | `python3 -m http.server 5000` |
-| **`client2`** | `client2` | `172.20.0.4` | `project-net` | No | `sleep infinity` |
-| **`network-controller`** | `network-controller` | *Host IP* | `host` | Yes | `sleep infinity` |
+| Container | Hostname | IP Address | Network Mode | Privileged | Default Command / Process | Role |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **`client1`** | `client1` | `172.20.0.2` | `project-net` | No | `sleep infinity` | Network Client Node |
+| **`server`** | `server` | `172.20.0.3` | `project-net` | No | `python3 -m http.server 5000` | HTTP/TCP Server Daemon |
+| **`client2`** | `client2` | `172.20.0.4` | `project-net` | No | `sleep infinity` | Network Client Node |
+| **`network-controller`** | `network-controller` | *Host IP* | `host` | Yes | `sleep infinity` | Controller & Policy Enforcer |
 
 ### 🛠️ Container Capabilities & Utilities
+
 All containers are built from the local `Dockerfile` (based on `python:3.12-slim`) and include the following network administration utilities pre-installed:
 * **`iproute2`**: Providing the `ip` tool suite (e.g. `ip addr`, `ip route`, `ip link`).
 * **`iputils-ping`**: Providing the `ping` utility for connectivity checks.
@@ -102,16 +121,17 @@ Before setting up the environment, ensure your host machine meets the following 
 
 ---
 
-## 🚀 Installation & Automated Setup
+## 🚀 Installation & Setup
 
-The easiest way to initialize the network environment is using the provided automation script:
+### ⚡ Quick Start / Automated Setup
+To quickly get the environment running and perform automated connectivity verification, execute:
 
 1. Navigate to the network directory:
    ```bash
    cd network
    ```
 
-2. Make the script executable (if not already):
+2. Make the setup script executable (if not already):
    ```bash
    chmod +x setup.sh
    ```
@@ -121,7 +141,7 @@ The easiest way to initialize the network environment is using the provided auto
    ./setup.sh
    ```
 
-### What `setup.sh` Does:
+#### What `setup.sh` Does:
 1. **Environment Verifications**: Validates Docker installations and checks if the Docker daemon is active.
 2. **Teardown & Clean**: Cleans up previous container runs, leftover project networks, and orphans.
 3. **Build & Deploy**: Triggers the Docker Compose build process (`docker compose up -d --build`).
@@ -133,77 +153,158 @@ The easiest way to initialize the network environment is using the provided auto
    * **ICMP Ping**: client1 -> server
    * **ICMP Ping**: client2 -> server
 
----
-
-## 🛠️ Manual Environment Management
+### 🛠️ Manual Environment Management
 
 If you prefer to control the environment manually instead of using `setup.sh`, use the following commands:
 
-### 1. Build and Start the Environment
-Run this from the `network/` directory:
-```bash
-docker compose up -d --build
-```
+1. **Build and Start Environment** (from `network/` directory):
+   ```bash
+   docker compose up -d --build
+   ```
 
-### 2. View Active Containers
-Check the status of running containers:
-```bash
-docker compose ps
-```
+2. **View Active Containers**:
+   ```bash
+   docker compose ps
+   ```
 
-### 3. Access a Container's Shell
-To enter an interactive bash shell in any container:
-```bash
-# Enter client1
-docker exec -it client1 bash
+3. **Access Container Shell**:
+   ```bash
+   # Enter client1
+   docker exec -it client1 bash
 
-# Enter client2
-docker exec -it client2 bash
+   # Enter client2
+   docker exec -it client2 bash
 
-# Enter the network-controller
-docker exec -it network-controller bash
-```
+   # Enter the network-controller
+   docker exec -it network-controller bash
+   ```
 
-### 4. Stop and Clean the Environment
-To stop containers without deleting them:
-```bash
-docker compose stop
-```
-To stop, delete containers, and clean networks:
-```bash
-docker compose down
-```
+4. **Stop and Clean Environment**:
+   ```bash
+   # Stop containers without deleting
+   docker compose stop
+
+   # Stop, delete containers, and clean networks
+   docker compose down
+   ```
 
 ---
 
-## 📡 Testing Connectivity Manually
+## 📡 Testing & Network Baseline Verification
+
+This section documents manual testing execution and the verified network baseline measurements for the Intelligent Network Assistant (INA) environment.
+
+### 🧪 Manual Connectivity Testing
 
 You can manually execute the following validation commands to verify your setup:
 
-### ICMP Ping Verification
+#### ICMP Ping Verification
 Run a ping test from `client1` to `server`:
 ```bash
 docker exec -it client1 ping -c 4 server
 ```
 
-### TCP Socket Communication Test (Custom Client/Server)
+#### TCP Socket Communication Test (Custom Client/Server)
 Inside the containers, a custom Python TCP script (`client.py`) is copied to `/app/client.py`. You can use it to test custom message exchange:
 
-1. **Start the TCP server listener inside `client1`**:
+1. **Start TCP server listener inside `client1`**:
    ```bash
    docker exec -it client1 python3 client.py server
    ```
-   *(This starts a listener on `0.0.0.0:5000`)*
+   *(Starts listener on `0.0.0.0:5000`)*
 
-2. **Trigger the TCP client inside `client2` in a separate terminal**:
+2. **Trigger TCP client inside `client2` in a separate terminal**:
    ```bash
    docker exec -it client2 python3 client.py client
    ```
-   *(This connects to `client1:5000`, sends a handshake message, prints the server response, and repeats every 5 seconds)*
+   *(Connects to `client1:5000`, sends handshake, prints server response, and repeats every 5 seconds)*
 
 3. **Verify Output**:
    * **Client output**: `connecting to client1:5000`, `recieved : Hello from server`
    * **Server output**: `waiting for connection...`, `recieved message: hello form client2`
+
+---
+
+### 📊 Baseline Network Verification & Diagnostic Outputs
+
+#### Connectivity Matrix & Verification
+
+##### 1. `client1` ➔ `server` (ICMP & TCP)
+* **Status**: `PASS`
+* **Packet Loss**: `0%`
+* **Average RTT**: `0.044 ms`
+
+**Ping Command Execution Output:**
+```text
+PING server (172.20.0.3) 56(84) bytes of data.
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=1 ttl=64 time=0.031 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=2 ttl=64 time=0.053 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=3 ttl=64 time=0.039 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=4 ttl=64 time=0.053 ms
+
+--- server ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3082ms
+rtt min/avg/max/mdev = 0.031/0.044/0.053/0.009 ms
+```
+
+##### 2. `client2` ➔ `server` (ICMP & TCP)
+* **Status**: `PASS`
+* **Packet Loss**: `0%`
+* **Average RTT**: `0.055 ms`
+
+**Ping Command Execution Output:**
+```text
+PING server (172.20.0.3) 56(84) bytes of data.
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=1 ttl=64 time=0.030 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=2 ttl=64 time=0.092 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=3 ttl=64 time=0.048 ms
+64 bytes from server.network_project-net (172.20.0.3): icmp_seq=4 ttl=64 time=0.052 ms
+
+--- server ping statistics ---
+4 packets transmitted, 4 received, 0% packet loss, time 3096ms
+rtt min/avg/max/mdev = 0.030/0.055/0.092/0.022 ms
+```
+
+#### Diagnostic Outputs: Interfaces & Routing Table
+
+##### Client 1 (`client1`) Interfaces (`ip addr`)
+```text
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host proto kernel_lo 
+       valid_lft forever preferred_lft forever
+2: eth0@if75: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
+    link/ether ae:3b:f5:9e:6c:ac brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.20.0.2/24 brd 172.20.0.255 scope global eth0
+       valid_lft forever preferred_lft forever
+```
+
+##### Client 2 (`client2`) Interfaces (`ip addr`)
+```text
+1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
+    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+    inet 127.0.0.1/8 scope host lo
+       valid_lft forever preferred_lft forever
+    inet6 ::1/128 scope host proto kernel_lo 
+       valid_lft forever preferred_lft forever
+2: eth0@if74: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
+    link/ether 2a:64:78:2f:15:11 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.20.0.4/24 brd 172.20.0.255 scope global eth0
+       valid_lft forever preferred_lft forever
+```
+
+##### Routing Table (`ip route`)
+Verified routing configuration on client nodes:
+```text
+default via 172.20.0.1 dev eth0 
+172.20.0.0/24 dev eth0 proto kernel scope link src 172.20.0.2 
+```
+
+#### Baseline Summary Status
+* **Status**: `PASS`
+* **Security & Traffic Control Note**: No firewall policies, traffic shaping, or packet dropping configured. This baseline serves as the raw network speed/routing benchmark.
 
 ---
 
