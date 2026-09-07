@@ -1,12 +1,120 @@
-import subprocess #Allows running system commands
+import subprocess
 
-#Client IPs in the docker network
+
+# Client IPs in the Docker network
 CLIENT_IPS = {
     "client1": "172.20.0.2",
     "client2": "172.20.0.4"
 }
 
-# Function to block a client
+
+# --------------------------------------------------
+# Helper: initialize nftables bridge filtering
+# --------------------------------------------------
+
+def _initialize_bridge_filter() -> tuple[bool, str]:
+    """
+    Create the nftables bridge table, chain, and blocked-client set
+    if they do not already exist.
+
+    The rules are applied directly to bridged traffic rather than
+    relying on the normal Layer-3 iptables forwarding path.
+    """
+
+    try:
+        # Check whether our table already exists.
+        check_table = subprocess.run(
+            [
+                "docker", "exec", "network-controller",
+                "nft", "list", "table", "bridge", "network_filter"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if check_table.returncode == 0:
+            return True, "Bridge filter already initialized."
+
+        # Create bridge-family table.
+        result = subprocess.run(
+            [
+                "docker", "exec", "network-controller",
+                "nft", "add", "table", "bridge", "network_filter"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+
+        # Create a bridge forwarding chain.
+        result = subprocess.run(
+            [
+                "docker", "exec", "network-controller",
+                "nft", "add", "chain",
+                "bridge", "network_filter", "forward",
+                "{ type filter hook forward priority 0; policy accept; }"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+
+        # Create a set containing IP addresses of blocked clients.
+        result = subprocess.run(
+            [
+                "docker", "exec", "network-controller",
+                "nft", "add", "set",
+                "bridge", "network_filter", "blocked_clients",
+                "{ type ipv4_addr; }"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+
+        # Add the actual blocking rule.
+        #
+        # Any IPv4 packet whose source IP is present in the
+        # blocked_clients set will be dropped.
+        result = subprocess.run(
+            [
+                "docker", "exec", "network-controller",
+                "nft", "add", "rule",
+                "bridge", "network_filter", "forward",
+                "ip", "saddr", "@blocked_clients",
+                "drop"
+            ],
+            capture_output=True,
+            text=True,
+            check=False
+        )
+
+        if result.returncode != 0:
+            return False, result.stderr.strip()
+
+        return True, "Bridge filter initialized successfully."
+
+    except FileNotFoundError:
+        return False, "Docker command not found."
+
+    except Exception as error:
+        return False, str(error)
+
+
+# --------------------------------------------------
+# Block client
+# --------------------------------------------------
+
 def block_client(client: str) -> dict:
     try:
         if client not in CLIENT_IPS:
@@ -19,17 +127,30 @@ def block_client(client: str) -> dict:
 
         client_ip = CLIENT_IPS[client]
 
+        # Make sure the nftables bridge filter exists.
+        initialized, message = _initialize_bridge_filter()
+
+        if not initialized:
+            return {
+                "status": "failure",
+                "action": "block_client",
+                "client": client,
+                "message": f"Failed to initialize bridge filter: {message}"
+            }
+
+        # Add the client's IP to the blocked set.
         command = [
             "docker", "exec", "network-controller",
-            "iptables", "-I", "DOCKER-USER",
-            "-s", client_ip, "-j", "DROP"
+            "nft", "add", "element",
+            "bridge", "network_filter", "blocked_clients",
+            "{", client_ip, "}"
         ]
 
         result = subprocess.run(
             command,
             capture_output=True,
-            check=False,
             text=True,
+            check=False
         )
 
         if result.returncode == 0:
@@ -37,7 +158,16 @@ def block_client(client: str) -> dict:
                 "status": "success",
                 "action": "block_client",
                 "client": client,
-                "message": f"Client {client} blocked successfully."
+                "message": f"Client {client} blocked successfully at bridge level."
+            }
+
+        # If the IP is already present, treat it as success.
+        if "File exists" in result.stderr:
+            return {
+                "status": "success",
+                "action": "block_client",
+                "client": client,
+                "message": f"Client {client} is already blocked."
             }
 
         return {
@@ -63,7 +193,11 @@ def block_client(client: str) -> dict:
             "message": str(error)
         }
 
-# Function to unblock a client
+
+# --------------------------------------------------
+# Unblock client
+# --------------------------------------------------
+
 def unblock_client(client: str) -> dict:
     try:
         if client not in CLIENT_IPS:
@@ -76,17 +210,19 @@ def unblock_client(client: str) -> dict:
 
         client_ip = CLIENT_IPS[client]
 
+        # Remove the client's IP from the blocked set.
         command = [
             "docker", "exec", "network-controller",
-            "iptables", "-D", "DOCKER-USER",
-            "-s", client_ip, "-j", "DROP"
+            "nft", "delete", "element",
+            "bridge", "network_filter", "blocked_clients",
+            "{", client_ip, "}"
         ]
 
         result = subprocess.run(
             command,
             capture_output=True,
-            check=False,
             text=True,
+            check=False
         )
 
         if result.returncode == 0:
@@ -95,6 +231,15 @@ def unblock_client(client: str) -> dict:
                 "action": "unblock_client",
                 "client": client,
                 "message": f"Client {client} unblocked successfully."
+            }
+
+        # If it was already absent, the desired state is already achieved.
+        if "No such file" in result.stderr:
+            return {
+                "status": "success",
+                "action": "unblock_client",
+                "client": client,
+                "message": f"Client {client} is already unblocked."
             }
 
         return {
@@ -119,7 +264,12 @@ def unblock_client(client: str) -> dict:
             "client": client,
             "message": str(error)
         }
-        
+
+
+# --------------------------------------------------
+# Limit bandwidth
+# --------------------------------------------------
+
 def limit_bandwidth(client: str, rate: str) -> dict:
     if client not in CLIENT_IPS:
         return {
@@ -129,9 +279,7 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "rate": rate,
             "message": f"Unknown client: {client}."
         }
-    
-    client_ip = CLIENT_IPS[client]
-    
+
     try:
         command = [
             "docker", "exec", client,
@@ -143,18 +291,13 @@ def limit_bandwidth(client: str, rate: str) -> dict:
         ]
 
         result = subprocess.run(
-        #tc controls traffic, qdisc controls packet queuing
-        # apply it to dev eth0 interface
-        # tbf used for rate limiting
-        # latency tell max time packets can with in the queue
             command,
             capture_output=True,
             text=True,
             check=False
-        )     
-        
-        
-        if(result.returncode == 0):
+        )
+
+        if result.returncode == 0:
             return {
                 "status": "success",
                 "action": "limit_bandwidth",
@@ -163,7 +306,6 @@ def limit_bandwidth(client: str, rate: str) -> dict:
                 "message": f"Bandwidth limited to {rate} successfully."
             }
 
-        #Failure
         return {
             "status": "failure",
             "action": "limit_bandwidth",
@@ -171,16 +313,16 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "rate": rate,
             "message": result.stderr.strip()
         }
-    
+
     except FileNotFoundError:
         return {
             "status": "failure",
             "action": "limit_bandwidth",
             "client": client,
             "rate": rate,
-            "message": "tc command not found."
+            "message": "Docker or tc command not found."
         }
-    
+
     except Exception as error:
         return {
             "status": "failure",
@@ -189,4 +331,3 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "rate": rate,
             "message": str(error)
         }
-        

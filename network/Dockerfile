@@ -9,6 +9,7 @@ RUN apt-get update && \
         iperf3 \ 
         net-tools \
         iptables \
+        nftables \
         kmod \
         procps \
         docker.io && \
