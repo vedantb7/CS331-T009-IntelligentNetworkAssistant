@@ -1,65 +1,64 @@
 services:
 
+# http server
   server:
-    cap_add:
-      - NET_ADMIN
-    build: 
+    build: # build the image using DockerFile with name as server
       context: .
       dockerfile: Dockerfile
     container_name: server
     hostname: server
-    command: ["python3", "-m", "http.server", "5000"]
-    networks:
+    command: ["python3", "-m", "http.server", "5000"] # start http server on port = 5000
+    networks: # assigned static ip on the network
       project-net:
         ipv4_address: 172.20.0.3
 
+# http client1
   client1: 
-    cap_add:
-      - NET_ADMIN
-    build: 
+    build: # build imag using DockerFile with name as client1
       context: .
       dockerfile: Dockerfile
-    container_name: client1
+    container_name: client1 
     hostname: client1
-    command: ["sleep", "infinity"]
-    networks:
+    command: ["sleep", "infinity"] # keep container running 
+    networks: # assigned static ip on the network
         project-net:
           ipv4_address: 172.20.0.2
 
+# http client2
   client2:
-    cap_add:
-      - NET_ADMIN
-    build: 
+    build: # build image using DockerFile  with name as client2
       context: .
       dockerfile: Dockerfile
     container_name: client2
     hostname: client2
-    command: ["sleep", "infinity"]
-    networks:
+    command: ["sleep", "infinity"] # keep the container running 
+    networks: # assign static ip on the network
       project-net:
         ipv4_address: 172.20.0.4
 
 
+# cotroller: responsible for the network control
   network-controller:
-    build:
+    build: # build container from DockerFile
       context: .
       dockerfile: Dockerfile
     container_name: network-controller
     hostname: network-controller
-    privileged: true
-    network_mode: host
-    command: ["sleep", "infinity"]
-    volumes:
+    privileged: true # required for network level operations
+    network_mode: host # give conatiner hsot privileges
+    command: ["sleep", "infinity"] # keep container running 
+    volumes: # add linux's kernel modules
       - /lib/modules:/lib/modules:ro
       - ..:/app
       - /var/run/docker.sock:/var/run/docker.sock
-    working_dir: /app
+    working_dir: /app # working directory for the project
 
 
-networks:
+# docker bridge (custom network bridge on which the containers communicate)
+networks: 
   project-net:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/24
+        - subnet: 172.20.0.0/24 # network subnet mask 
 
