@@ -41,6 +41,9 @@ def pick_source_container(target_client):
     block rule is actually enforced — the same reason check_bandwidth()
     already runs iperf3 via `docker exec` instead of from the host.
     """
+    if target_client not in CLIENT_IPS:
+        raise ValueError(f"unknown client: {target_client}")
+
     for candidate in ("server", "client1", "client2"):
         if candidate != target_client and candidate in CLIENT_IPS:
             return candidate

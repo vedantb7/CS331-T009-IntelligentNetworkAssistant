@@ -1,3 +1,8 @@
 .env
 .venv/
 __pycache__/
+
+# log files
+policy/audit_log.jsonl
+*.log
+*.jsonl

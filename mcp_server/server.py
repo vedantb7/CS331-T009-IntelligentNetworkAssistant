@@ -1,5 +1,5 @@
 from fastmcp import FastMCP
-from tools import block_client, unblock_client, limit_bandwidth
+from mcp_server.tools import block_client, unblock_client, limit_bandwidth
 
 mcp = FastMCP("Network Assistant") #Name of server
 
