@@ -6,8 +6,6 @@ Owner: Ananya (AI Assistant, Intent Parsing, Orchestration & Integration)
 
 WHAT THIS FILE DOES
 --------------------
-1. Accepts a natural-language network command from a human ("Block client1",
-   "Limit client1 to 5 Mbps", "Unblock client2", "Block management_server").
 2. Parses it into a structured Intent (action / target / params) using an
    LLM (via LiteLLM, Anthropic, or OpenAI SDKs — whichever is installed and
    configured) with a deterministic regex-based parser as a guaranteed
@@ -58,9 +56,11 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # ---------------------------------------------------------------------------
 # 0. TERMINAL OUTPUT — rich with a graceful plain-text fallback
@@ -850,14 +850,22 @@ def _template_response(report: Dict[str, Any]) -> str:
 
 
 # --- Regex fallback: deterministic, dependency-free, always available -----
-_BLOCK_RE = re.compile(r"\bblock\b\s+(?P<target>[a-zA-Z0-9_\- ]+)", re.IGNORECASE)
-_UNBLOCK_RE = re.compile(r"\bunblock\b\s+(?P<target>[a-zA-Z0-9_\- ]+)", re.IGNORECASE)
+_BLOCK_RE = re.compile(
+    r"\b(?:block|kick|isolate)\b\s+(?P<target>[a-zA-Z0-9_\-]+)",
+    re.IGNORECASE,
+)
+_UNBLOCK_RE = re.compile(
+    r"\b(?:unblock|restore)\b\s+(?P<target>[a-zA-Z0-9_\-]+)",
+    re.IGNORECASE,
+)
 _LIMIT_RE = re.compile(
-    r"\blimit\b\s+(?P<target>[a-zA-Z0-9_\- ]+?)\s+to\s+(?P<rate>\d+(\.\d+)?)\s*mbps",
+    r"\b(?:limit|throttle|cap)\b\s+(?P<target>[a-zA-Z0-9_\-]+)"
+    r"(?:\s+(?:bandwidth|speed))?\s+to\s+(?P<rate>\d+(\.\d+)?)\s*(?:mbit|mbps|mb/s)?",
     re.IGNORECASE,
 )
 _STATUS_RE = re.compile(
-    r"\b(status|check)\b(\s+of)?\s+(?P<target>[a-zA-Z0-9_\- ]+)", re.IGNORECASE
+    r"\b(?:status|check)\b(?:\s+of)?\s+(?P<target>[a-zA-Z0-9_\-]+)",
+    re.IGNORECASE,
 )
 
 

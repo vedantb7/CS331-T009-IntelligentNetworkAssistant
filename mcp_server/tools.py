@@ -6,11 +6,28 @@ CLIENT_IPS = {
     "client1": "172.20.0.2",
     "client2": "172.20.0.4"
 }
+SERVER_IP = "172.20.0.3"
 
 
 # --------------------------------------------------
 # Helper: initialize nftables bridge filtering
 # --------------------------------------------------
+
+def _nft(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        ["docker", "exec", "network-controller", "nft", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def _nft_ok(result: subprocess.CompletedProcess) -> bool:
+    if result.returncode == 0:
+        return True
+    err = (result.stderr or "").lower()
+    return "file exists" in err or "already exists" in err
+
 
 def _initialize_bridge_filter() -> tuple[bool, str]:
     """
@@ -22,85 +39,40 @@ def _initialize_bridge_filter() -> tuple[bool, str]:
     """
 
     try:
-        # Check whether our table already exists.
-        check_table = subprocess.run(
-            [
-                "docker", "exec", "network-controller",
-                "nft", "list", "table", "bridge", "network_filter"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        steps = [
+            ("add", "table", "bridge", "network_filter"),
+            (
+                "add", "chain", "bridge", "network_filter", "forward",
+                "{ type filter hook forward priority 0; policy accept; }",
+            ),
+            (
+                "add", "set", "bridge", "network_filter", "blocked_clients",
+                "{ type ipv4_addr; }",
+            ),
+        ]
+        for args in steps:
+            result = _nft(*args)
+            if not _nft_ok(result):
+                return False, result.stderr.strip()
 
-        if check_table.returncode == 0:
-            return True, "Bridge filter already initialized."
+        listed = _nft("list", "chain", "bridge", "network_filter", "forward")
+        chain_text = listed.stdout if listed.returncode == 0 else ""
 
-        # Create bridge-family table.
-        result = subprocess.run(
-            [
-                "docker", "exec", "network-controller",
-                "nft", "add", "table", "bridge", "network_filter"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
+        if "saddr @blocked_clients" not in chain_text:
+            result = _nft(
+                "add", "rule", "bridge", "network_filter", "forward",
+                "ip", "saddr", "@blocked_clients", "drop",
+            )
+            if not _nft_ok(result):
+                return False, result.stderr.strip()
 
-        if result.returncode != 0:
-            return False, result.stderr.strip()
-
-        # Create a bridge forwarding chain.
-        result = subprocess.run(
-            [
-                "docker", "exec", "network-controller",
-                "nft", "add", "chain",
-                "bridge", "network_filter", "forward",
-                "{ type filter hook forward priority 0; policy accept; }"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode != 0:
-            return False, result.stderr.strip()
-
-        # Create a set containing IP addresses of blocked clients.
-        result = subprocess.run(
-            [
-                "docker", "exec", "network-controller",
-                "nft", "add", "set",
-                "bridge", "network_filter", "blocked_clients",
-                "{ type ipv4_addr; }"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode != 0:
-            return False, result.stderr.strip()
-
-        # Add the actual blocking rule.
-        #
-        # Any IPv4 packet whose source IP is present in the
-        # blocked_clients set will be dropped.
-        result = subprocess.run(
-            [
-                "docker", "exec", "network-controller",
-                "nft", "add", "rule",
-                "bridge", "network_filter", "forward",
-                "ip", "saddr", "@blocked_clients",
-                "drop"
-            ],
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode != 0:
-            return False, result.stderr.strip()
+        if "daddr @blocked_clients" not in chain_text:
+            result = _nft(
+                "add", "rule", "bridge", "network_filter", "forward",
+                "ip", "daddr", "@blocked_clients", "drop",
+            )
+            if not _nft_ok(result):
+                return False, result.stderr.strip()
 
         return True, "Bridge filter initialized successfully."
 
@@ -234,7 +206,8 @@ def unblock_client(client: str) -> dict:
             }
 
         # If it was already absent, the desired state is already achieved.
-        if "No such file" in result.stderr:
+        err = result.stderr or ""
+        if "No such file" in err or "No such element" in err or "does not exist" in err:
             return {
                 "status": "success",
                 "action": "unblock_client",
@@ -329,5 +302,57 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "action": "limit_bandwidth",
             "client": client,
             "rate": rate,
+            "message": str(error)
+        }
+
+
+# --------------------------------------------------
+# Client status
+# --------------------------------------------------
+
+def get_status(client: str) -> dict:
+    known = {**CLIENT_IPS, "server": SERVER_IP}
+    if client not in known:
+        return {
+            "status": "failure",
+            "action": "get_status",
+            "client": client,
+            "message": f"Client {client} not found in the network."
+        }
+
+    client_ip = known[client]
+    source = "client1" if client == "server" else "server"
+
+    try:
+        result = subprocess.run(
+            ["docker", "exec", source, "ping", "-c", "1", "-W", "1", client_ip],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        reachable = result.returncode == 0
+        return {
+            "status": "success",
+            "action": "get_status",
+            "client": client,
+            "message": (
+                f"{client} ({client_ip}) is reachable."
+                if reachable
+                else f"{client} ({client_ip}) is unreachable."
+            ),
+            "reachable": reachable,
+        }
+    except FileNotFoundError:
+        return {
+            "status": "failure",
+            "action": "get_status",
+            "client": client,
+            "message": "Docker command not found. Please ensure Docker is running and available in PATH."
+        }
+    except Exception as error:
+        return {
+            "status": "failure",
+            "action": "get_status",
+            "client": client,
             "message": str(error)
         }

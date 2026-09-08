@@ -1,3 +1,5 @@
+name: network
+
 services:
 
 # http server
@@ -7,7 +9,10 @@ services:
       dockerfile: Dockerfile
     container_name: server
     hostname: server
-    command: ["python3", "-m", "http.server", "5000"] # start http server on port = 5000
+    # HTTP demo service plus a persistent iperf3 listener for bandwidth checks
+    command: ["sh", "-c", "iperf3 -s -D && exec python3 -m http.server 5000"]
+    cap_add:
+      - NET_ADMIN
     networks: # assigned static ip on the network
       project-net:
         ipv4_address: 172.20.0.3
@@ -19,7 +24,9 @@ services:
       dockerfile: Dockerfile
     container_name: client1 
     hostname: client1
-    command: ["sleep", "infinity"] # keep container running 
+    command: ["sleep", "infinity"] # keep container running
+    cap_add:
+      - NET_ADMIN
     networks: # assigned static ip on the network
         project-net:
           ipv4_address: 172.20.0.2
@@ -31,7 +38,9 @@ services:
       dockerfile: Dockerfile
     container_name: client2
     hostname: client2
-    command: ["sleep", "infinity"] # keep the container running 
+    command: ["sleep", "infinity"] # keep the container running
+    cap_add:
+      - NET_ADMIN
     networks: # assign static ip on the network
       project-net:
         ipv4_address: 172.20.0.4

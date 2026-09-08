@@ -1,3 +1,4 @@
+# imports
 import os
 import sys
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -8,15 +9,17 @@ from validation.models import ValidationRequest, ValidationResult
 
 import re
 
+# client and server ip addresses
 CLIENT_IPS = {
     "client1": "172.20.0.2",
     "client2": "172.20.0.4",
     "server": "172.20.0.3"
 }
 
-PING_COUNT = 3
-PING_TIMEOUT = 1
-PING_REQUIRED_SUCCESS = 2
+# initialized variables
+PING_COUNT = 3 # no. of pings to perform in each ping command
+PING_TIMEOUT = 1 # ping timeout for the ping cmd
+PING_REQUIRED_SUCCESS = 2 #     
 
 BANDWIDTH_TEST_DURATION = 5
 BANDWIDTH_TOLERANCE = 0.20
@@ -160,8 +163,10 @@ def check_unblock(client):
 
 def parse_rate(rate):
     rate = rate.lower().strip()
-    value = float(rate[:-4])
-    unit = rate[-4:]
+    unit = next((u for u in ("kbit", "mbit", "gbit") if rate.endswith(u)), None)
+    if unit is None:
+        raise ValueError(f"Unsupported rate unit: {rate}")
+    value = float(rate[: -len(unit)])
 
     if unit == "gbit":
         return value * 1000
@@ -180,20 +185,49 @@ def bandwidth_within_tolerance(measured, expected):
 def parse_iperf_result(output):
     try:
         data = json.loads(output)
-        bits_per_second = data["end"]["sum_received"]["bits_per_second"]
+        end = data["end"]
+        summary = end.get("sum_received") or end.get("sum_sent") or end.get("sum")
+        bits_per_second = summary["bits_per_second"]
         return bits_per_second / 1_000_000
     except (json.JSONDecodeError, KeyError, TypeError) as error:
         raise RuntimeError(f"Unable to parse iperf3 output: {error}")
 
+def ensure_iperf_server():
+    probe = subprocess.run(
+        ["docker", "exec", "server", "sh", "-c", "ss -lnt 2>/dev/null | grep -q ':5201 '"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    if probe.returncode == 0:
+        return
+    subprocess.run(
+        ["docker", "exec", "-d", "server", "iperf3", "-s"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
 def run_iperf(client, server_ip):
+    ensure_iperf_server()
     result = subprocess.run(
-        ["docker", "exec", client, "iperf3", "-c", server_ip, "-J"],
+        [
+            "docker",
+            "exec",
+            client,
+            "iperf3",
+            "-c",
+            server_ip,
+            "-t",
+            str(BANDWIDTH_TEST_DURATION),
+            "-J",
+        ],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
     )
     if result.returncode != 0:
-        raise RuntimeError(f"iperf3 failed: {result.stderr.strip()}")
+        raise RuntimeError(f"iperf3 failed: {(result.stderr or result.stdout).strip()}")
     return parse_iperf_result(result.stdout)
 
 def check_bandwidth(client, expected_rate):

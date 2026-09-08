@@ -19,3 +19,26 @@
 {"timestamp": "2026-09-01T10:13:48", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
 {"timestamp": "2026-09-01T10:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 5, "rate": "5mbit"}, "status": "ALLOWED", "reason": "5.0mbit is within allowed range. Limit permitted."}
 {"timestamp": "2026-09-01T10:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 5, "rate": "5mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-08T10:49:32", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-08T10:49:32", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-08T10:49:47", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-08T10:49:47", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-08T10:50:13", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-08T10:50:13", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-08T11:17:48", "action": "block_client", "params": {"client": "client32"}, "status": "DENIED", "reason": "'client32' is not a recognized client in this network."}
+{"timestamp": "2026-09-08T11:18:10", "action": "block_client", "params": {"client": "client_37"}, "status": "DENIED", "reason": "'client_37' is not a recognized client in this network."}
+{"timestamp": "2026-09-08T11:19:02", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-08T11:19:03", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-08T11:19:19", "action": "get_status", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Status query permitted for 'client1'."}
+{"timestamp": "2026-09-08T11:19:20", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "client1 (172.20.0.2) is unreachable."}
+{"timestamp": "2026-09-08T11:19:43", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-08T11:19:43", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-08T11:19:54", "action": "get_status", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Status query permitted for 'client1'."}
+{"timestamp": "2026-09-08T11:19:54", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "client1 (172.20.0.2) is reachable."}
+{"timestamp": "2026-09-08T11:20:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 55, "rate": "55mbit"}, "status": "DENIED", "reason": "Requested rate 55.0mbit is outside the allowed range (1.0mbit - 20.0mbit)."}
+{"timestamp": "2026-09-08T11:20:47", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 16, "rate": "16mbit"}, "status": "ALLOWED", "reason": "16.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-08T11:20:47", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 16, "rate": "16mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 16mbit successfully."}
+{"timestamp": "2026-09-08T11:21:08", "action": "get_status", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Status query permitted for 'client1'."}
+{"timestamp": "2026-09-08T11:21:08", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "client1 (172.20.0.2) is reachable."}
+{"timestamp": "2026-09-08T11:23:46", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 1, "rate": "1mbit"}, "status": "ALLOWED", "reason": "1.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-08T11:23:46", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 1, "rate": "1mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 1mbit successfully."}

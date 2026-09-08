@@ -15,6 +15,7 @@ allowed_actions:
   - block_client
   - unblock_client
   - limit_bandwidth
+  - get_status
 
 # Client names that actually exist in the Docker network.
 known_clients:

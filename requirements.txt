@@ -2,6 +2,8 @@
 pyyaml         # policy/policy_engine.py reads rules.yaml
 rich           # assistant/client.py terminal formatting (falls back to plain text if missing)
 pydantic       # validation/models.py request/result schemas
+python-dotenv  # assistant/client.py loads OPENROUTER_API_KEY from .env
+openai         # OpenRouter-compatible client used by assistant/client.py
 
 # Optional: only needed if you want LLM-backed intent parsing instead of
 # the built-in regex fallback. Install whichever one you have an API key

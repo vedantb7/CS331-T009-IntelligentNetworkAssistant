@@ -26,7 +26,10 @@ def _parse_mbit(value):
     # Converts "5mbit" (text) or 5 (number) into a plain float, e.g. 5.0
     if isinstance(value, (int, float)):
         return float(value)
-    return float(str(value).replace("mbit", "").strip())
+    text = str(value).strip().lower()
+    for suffix in ("mbit", "mbps", "mb/s"):
+        text = text.replace(suffix, "")
+    return float(text.strip())
 
 
 def check_policy(action: str, params: dict) -> PolicyResult:
@@ -63,6 +66,12 @@ def check_policy(action: str, params: dict) -> PolicyResult:
 
         # unblocking is always safe (it restores normal access), so just allow it
         return PolicyResult(True, f"Unblock permitted for '{client}'.")
+
+    if action == "get_status":
+        client = params.get("client")
+        if client not in policy.get("known_clients", []):
+            return PolicyResult(False, f"'{client}' is not a recognized client in this network.")
+        return PolicyResult(True, f"Status query permitted for '{client}'.")
 
     # Step 4: handle "limit_bandwidth" requests
     if action == "limit_bandwidth":

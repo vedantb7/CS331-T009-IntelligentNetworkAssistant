@@ -18,5 +18,5 @@ def unblock(client: str) -> dict:
 def limit(client: str, rate: str) -> dict:
     return limit_bandwidth(client, rate)
 
-if(__name__ == "__main__"): #Check whether the file is being run directly, if yes, run below code
+if __name__ == "__main__":
     mcp.run()
