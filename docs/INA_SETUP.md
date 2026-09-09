@@ -26,17 +26,25 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### Step 4: Configure API Credentials
-INA uses OpenRouter (or Anthropic/OpenAI) for LLM-based natural language intent parsing. Set your key:
+### Step 4: Configure API Credentials (`.env`)
+INA uses OpenRouter (or Anthropic/OpenAI) for LLM-based intent parsing and automatically loads environment variables from a `.env` file via `python-dotenv`.
+
+To set up your API key persistently without setting environment variables manually in the command line every time:
 
 ```bash
-# Linux / macOS
-export OPENROUTER_API_KEY="sk-or-v1-..."
+# 1. Copy the example environment file to .env
+cp .env.example .env
 
-# Windows PowerShell
-$env:OPENROUTER_API_KEY="sk-or-v1-..."
+# 2. Edit .env and replace with your actual OpenRouter API key
+nano .env   # or edit in VS Code
 ```
-*(Note: If no API key is provided, INA automatically degrades gracefully to a deterministic regex parser.)*
+
+Inside `.env`:
+```env
+OPENROUTER_API_KEY=sk-or-v1-your-actual-api-key-here
+```
+
+*(Note: Alternatively, you can run `export OPENROUTER_API_KEY="sk-or-v1-..."` in your terminal shell. If no API key is provided, INA automatically degrades gracefully to a deterministic regex parser.)*
 
 ### Step 5: Start Docker Network Infrastructure
 Spin up the custom Docker bridge network (`network_project-net`) containing `client1`, `client2`, `server`, and `network-controller`:
