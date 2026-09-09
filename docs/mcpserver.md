@@ -78,15 +78,14 @@ Example:
 iptables -I DOCKER-USER -s 172.20.0.2 -j DROP
 ```
 
-### Bandwidth Limit
+### Bandwidth Limit (Bi-Directional Ingress & Egress)
 
-`tc` runs **inside the target container** on its `eth0` interface.
+Bandwidth limiting is enforced inside the target container using Linux Traffic Control (`tc`) and an Intermediate Functional Block (`ifb0`) pseudo-device to shape both **ingress** and **egress** traffic:
 
-Example:
-
-```bash
-tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
-```
+1. Create and enable `ifb0` device: `ip link add name ifb0 type ifb && ip link set dev ifb0 up`
+2. Add `ingress` qdisc on `eth0` and redirect ingress packets to `ifb0`: `tc qdisc add dev eth0 handle ffff: ingress && tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0`
+3. Apply TBF qdisc on `ifb0` for **Ingress Shaping**: `tc qdisc replace dev ifb0 root tbf rate <rate> burst 32kbit latency 400ms`
+4. Apply TBF qdisc on `eth0` for **Egress Shaping**: `tc qdisc replace dev eth0 root tbf rate <rate> burst 32kbit latency 400ms`
 
 ## Setup
 

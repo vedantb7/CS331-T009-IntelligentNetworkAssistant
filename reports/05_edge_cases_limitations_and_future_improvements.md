@@ -33,10 +33,22 @@ While the current implementation achieves high accuracy in container isolation a
 * **Implemented Solution**: Replaced static dictionaries with runtime container discovery using the **Docker SDK for Python** (`docker.from_env()`) in [`network/discovery.py`](file:///home/dhruv/Documents/ina/network/discovery.py). The system dynamically inspects running containers on the project bridge network and resolves IP addresses in real time.
 
 
-### 3.2 Egress-Only Traffic Shaping
+### 3.2 Implemented Solution: Bi-Directional Traffic Shaping via IFB (Intermediate Functional Block)
 
-* **Limitation**: The `tc qdisc replace dev eth0 root tbf ...` command is applied directly to the root qdisc of `eth0`, which controls **egress (outgoing)** traffic only.
-* **Impact**: Ingress (incoming) bandwidth is unthrottled. If `client2` sends data to `client1` at 10 Gbps, `client1`'s egress limit of 5 Mbps will only throttle its ACK responses, not the incoming TCP payload stream.
+* **Previous Limitation**: The standard `tc qdisc replace dev eth0 root tbf ...` command was applied directly to the root qdisc of `eth0`, which controls **egress (outgoing)** traffic only. Ingress (incoming) traffic remained unthrottled (~10 Gbps).
+* **Implemented Solution**: INA creates an **IFB (Intermediate Functional Block)** pseudo-device (`ifb0`) inside the target container's network namespace, attaches an ingress qdisc (`ffff:`) to `eth0`, and redirects all incoming packets to `ifb0` via `tc filter mirred egress redirect dev ifb0`. TBF qdiscs are applied to both `eth0` (egress) and `ifb0` (ingress), enforcing rate limits bi-directionally.
+
+```bash
+# Egress Shaping on eth0 root
+docker exec client1 tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
+
+# Ingress Shaping via IFB redirect
+docker exec client1 ip link add dev ifb0 type ifb
+docker exec client1 ip link set dev ifb0 up
+docker exec client1 tc qdisc add dev eth0 handle ffff: ingress
+docker exec client1 tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+docker exec client1 tc qdisc replace dev ifb0 root tbf rate 5mbit burst 32kbit latency 400ms
+```
 
 ### 3.3 Absence of Transactional Rollback Pipeline
 
@@ -68,25 +80,7 @@ Instead of using Layer-2 `nftables` bridge hooks, future iterations should deplo
   * Achieves wire-speed filtering capable of handling millions of packets per second (Mpps) during DDoS attacks.
   * Dynamically updates blocked IPs via eBPF BPF_MAP_TYPE_HASH maps.
 
-### 4.2 Proposal 2: Ingress Traffic Control via IFB (Intermediate Functional Block)
-
-To implement true bi-directional bandwidth shaping (Ingress + Egress), Linux **IFB pseudo-devices** should be used.
-
-#### Implementation Architecture:
-1. Load `ifb` kernel module: `modprobe ifb numifbs=1`.
-2. Redirect ingress traffic from `eth0` to `ifb0` using `tc filter`:
-   ```bash
-   # Enable ingress qdisc on eth0
-   tc qdisc add dev eth0 handle ffff: ingress
-
-   # Redirect all ingress traffic to ifb0
-   tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
-
-   # Apply TBF bandwidth rate limit on ifb0
-   tc qdisc add dev ifb0 root tbf rate 5mbit burst 32kbit latency 400ms
-   ```
-
-### 4.3 Proposal 3: Automated Two-Phase Commit & Rollback Pipeline
+### 4.2 Proposal 2: Automated Two-Phase Commit & Rollback Pipeline
 
 To ensure network state integrity, implement a **Transactional Rollback Pipeline** inside `assistant/client.py`:
 

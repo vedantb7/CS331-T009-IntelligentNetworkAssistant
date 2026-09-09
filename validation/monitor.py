@@ -218,20 +218,24 @@ def ensure_iperf_server():
         text=True,
     )
 
-def run_iperf(client, server_ip):
+def run_iperf(client, server_ip, reverse: bool = False):
     ensure_iperf_server()
+    cmd = [
+        "docker",
+        "exec",
+        client,
+        "iperf3",
+        "-c",
+        server_ip,
+        "-t",
+        str(BANDWIDTH_TEST_DURATION),
+        "-J",
+    ]
+    if reverse:
+        cmd.append("-R")
+
     result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            client,
-            "iperf3",
-            "-c",
-            server_ip,
-            "-t",
-            str(BANDWIDTH_TEST_DURATION),
-            "-J",
-        ],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True
@@ -244,14 +248,29 @@ def check_bandwidth(client, expected_rate):
     target_ip = get_ip(client)
     expected_mbps = parse_rate(expected_rate)
     server_ip = get_ip("server")
-    measured_mbps = run_iperf(client, server_ip)
 
-    passed = bandwidth_within_tolerance(measured_mbps, expected_mbps)
+    # Egress throughput test: client -> server
+    egress_mbps = run_iperf(client, server_ip, reverse=False)
+    egress_passed = bandwidth_within_tolerance(egress_mbps, expected_mbps)
+
+    # Ingress throughput test: server -> client (iperf3 reverse mode)
+    ingress_mbps = run_iperf(client, server_ip, reverse=True)
+    ingress_passed = bandwidth_within_tolerance(ingress_mbps, expected_mbps)
+
+    passed = egress_passed and ingress_passed
+    measured_mbps = round((egress_mbps + ingress_mbps) / 2.0, 2)
 
     if passed:
-        message = "Bandwidth is within the expected range."
+        message = (
+            f"Bi-directional bandwidth is within expected range "
+            f"(Egress: {egress_mbps:.2f} Mbps, Ingress: {ingress_mbps:.2f} Mbps)."
+        )
     else:
-        message = "Measured bandwidth is outside the expected range."
+        message = (
+            f"Measured bandwidth outside expected range "
+            f"(Egress: {egress_mbps:.2f} Mbps [passed={egress_passed}], "
+            f"Ingress: {ingress_mbps:.2f} Mbps [passed={ingress_passed}])."
+        )
 
     return ValidationResult(
         operation="BANDWIDTH",
@@ -263,6 +282,7 @@ def check_bandwidth(client, expected_rate):
         passed=passed,
         message=message
     )
+
 
 def print_result(result: ValidationResult):
     print(f"Validation: {result.operation}")

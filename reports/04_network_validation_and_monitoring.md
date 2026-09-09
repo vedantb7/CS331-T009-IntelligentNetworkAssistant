@@ -108,9 +108,9 @@ To verify `unblock_client("client1")`:
 1. Executes sibling container ping check.
 2. **Pass Criteria**: `packet_loss < 100.0%` (Confirms network connectivity restored).
 
-### 4.3 `iperf3` Throughput Verification (`check_bandwidth`)
+### 4.3 Bi-Directional `iperf3` Throughput Verification (`check_bandwidth`)
 
-To verify `limit_bandwidth("client1", "5mbit")`:
+To empirically verify bi-directional bandwidth limits (`limit_bandwidth("client1", "5mbit")`), `validation/monitor.py` measures both **egress (outgoing)** and **ingress (incoming)** throughput against `server`.
 
 #### Step 1: Server Socket Probing (`ensure_iperf_server`)
 Before benchmarking, inspects TCP port `5201` on `server` using `ss`:
@@ -119,14 +119,20 @@ docker exec server sh -c "ss -lnt 2>/dev/null | grep -q ':5201 '"
 ```
 If inactive, spawns background daemon: `docker exec -d server iperf3 -s`.
 
-#### Step 2: JSON Benchmark Benchmark Execution (`run_iperf`)
-Executes a 5-second `iperf3` test formatted in JSON (`-J`):
-```bash
-docker exec client1 iperf3 -c 172.20.0.3 -t 5 -J
-```
+#### Step 2: Bi-Directional JSON Benchmark Execution (`run_iperf`)
+Executes 5-second `iperf3` tests in both directions formatted in JSON (`-J`):
 
-#### Step 3: Rate Parsing & Tolerance Check
-Parses `end.sum_received.bits_per_second` and converts to Mbps:
+1. **Egress Throughput Check** (`client1 -> server`):
+   ```bash
+   docker exec client1 iperf3 -c 172.20.0.3 -t 5 -J
+   ```
+2. **Ingress Throughput Check** (`server -> client1` via Reverse mode `-R`):
+   ```bash
+   docker exec client1 iperf3 -c 172.20.0.3 -t 5 -R -J
+   ```
+
+#### Step 3: Dual-Direction Rate Parsing & Tolerance Verification
+Parses `end.sum_received.bits_per_second` (or `end.sum_sent.bits_per_second` for reverse mode) and converts to Mbps for both checks:
 ```python
 def bandwidth_within_tolerance(measured, expected):
     lower_limit = expected * (1 - BANDWIDTH_TOLERANCE) # expected * 0.80
@@ -135,8 +141,10 @@ def bandwidth_within_tolerance(measured, expected):
 ```
 
 * **Target Rate**: `5.0 Mbps`
-* **Tolerance Window**: `4.0 Mbps` to `6.0 Mbps` (±20%)
-* **Measured Rate**: `~4.85 Mbps` -> **Status**: `PASS`
+* **Tolerance Window**: `4.0 Mbps` to `6.0 Mbps` ($\pm 20\%$)
+* **Egress Measured**: `~4.64 Mbps` -> **Status**: `PASS`
+* **Ingress Measured**: `~4.54 Mbps` -> **Status**: `PASS`
+* **Overall Outcome**: PASS only if **both** egress and ingress measurements fall within tolerance.
 
 ---
 

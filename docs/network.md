@@ -292,26 +292,38 @@ Apply a Token Bucket Filter (`tbf`) queuing discipline on interface `eth0` of `c
   docker exec -d server iperf3 -s
 
   # Test baseline throughput prior to restriction
-  docker exec client1 iperf3 -c 172.20.0.3 -t 10
+  docker exec client1 iperf3 -c 172.20.0.3 -t 5
 
-  # Apply 5 Mbps bandwidth limit on client1 eth0
+  # Apply bi-directional 5 Mbps bandwidth limit on client1 (eth0 Egress + IFB Ingress)
   docker exec client1 tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
+  docker exec client1 ip link add dev ifb0 type ifb
+  docker exec client1 ip link set dev ifb0 up
+  docker exec client1 tc qdisc add dev eth0 handle ffff: ingress
+  docker exec client1 tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+  docker exec client1 tc qdisc replace dev ifb0 root tbf rate 5mbit burst 32kbit latency 400ms
 
   # Verify active tc queuing discipline configuration
   docker exec client1 tc qdisc show dev eth0
+  docker exec client1 tc qdisc show dev ifb0
 
-  # Measure throttled bandwidth
-  docker exec client1 iperf3 -c 172.20.0.3 -t 10
+  # Measure throttled egress bandwidth (client1 -> server)
+  docker exec client1 iperf3 -c 172.20.0.3 -t 5
 
-  # Remove bandwidth limitation (reset queuing discipline)
-  docker exec client1 tc qdisc del dev eth0 root
+  # Measure throttled ingress bandwidth (server -> client1 via reverse mode)
+  docker exec client1 iperf3 -c 172.20.0.3 -t 5 -R
+
+  # Remove bandwidth limitation (reset queuing disciplines and delete IFB device)
+  docker exec client1 tc qdisc del dev eth0 root 2>/dev/null
+  docker exec client1 tc qdisc del dev eth0 ingress 2>/dev/null
+  docker exec client1 tc qdisc del dev ifb0 root 2>/dev/null
+  docker exec client1 ip link delete dev ifb0 2>/dev/null
   ```
 
 * **Intended Result**:
   * **Baseline**: Unthrottled bandwidth achieves high speed (>10 Gbps).
-  * **qdisc Configuration**: `tc qdisc show` reports `qdisc tbf ... rate 5Mbit burst 4Kb lat 400ms`.
-  * **Throttled Benchmark**: `iperf3` transfer rate drops from >10 Gbps down to **~4.5 – 5.5 Mbps**.
-  * **Removal**: Deleting root `qdisc` restores throughput back to full unthrottled baseline speed (>10 Gbps).
+  * **qdisc Configuration**: `tc qdisc show` on both `eth0` and `ifb0` reports `qdisc tbf ... rate 5Mbit burst 4Kb lat 400ms`.
+  * **Throttled Benchmark**: Both egress and ingress `iperf3` transfer rates drop from >10 Gbps down to **~4.5 – 5.5 Mbps**.
+  * **Removal**: Cleaning up qdiscs and `ifb0` restores throughput back to full unthrottled baseline speed (>10 Gbps).
 
 ---
 

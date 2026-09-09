@@ -168,6 +168,9 @@ def unblock_client(client: str) -> dict:
     try:
         client_ip = get_container_ip(client)
 
+        # Remove previous tc qdiscs, filters, and IFB devices if any
+        _cleanup_tc_qdiscs(client)
+
         # Remove the client's IP from the blocked set.
         command = [
             "docker", "exec", "network-controller",
@@ -233,6 +236,21 @@ def unblock_client(client: str) -> dict:
         }
 
 
+def _cleanup_tc_qdiscs(client: str) -> None:
+    """
+    Remove previous tc qdiscs, filters, and IFB devices cleanly from container.
+    """
+    commands = [
+        ["docker", "exec", client, "tc", "qdisc", "del", "dev", "eth0", "root"],
+        ["docker", "exec", client, "tc", "qdisc", "del", "dev", "eth0", "ingress"],
+        ["docker", "exec", client, "tc", "qdisc", "del", "dev", "ifb0", "root"],
+        ["docker", "exec", client, "ip", "link", "set", "dev", "ifb0", "down"],
+        ["docker", "exec", client, "ip", "link", "delete", "dev", "ifb0"],
+    ]
+    for cmd in commands:
+        subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+
 # --------------------------------------------------
 # Limit bandwidth
 # --------------------------------------------------
@@ -242,37 +260,48 @@ def limit_bandwidth(client: str, rate: str) -> dict:
         # Dynamically verify container existence & IP
         _ = get_container_ip(client)
 
-        command = [
-            "docker", "exec", client,
-            "tc", "qdisc", "replace", "dev", "eth0",
-            "root", "tbf",
-            "rate", rate,
-            "burst", "32kbit",
-            "latency", "400ms"
-        ]
+        # 1. Clean up any existing qdiscs / IFB devices first
+        _cleanup_tc_qdiscs(client)
 
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            check=False
-        )
-
-        if result.returncode == 0:
+        if not rate or rate.strip().lower() in ("0", "0mbit", "none", "off", "del", "delete", "remove"):
             return {
                 "status": "success",
                 "action": "limit_bandwidth",
                 "client": client,
                 "rate": rate,
-                "message": f"Bandwidth limited to {rate} successfully."
+                "message": f"Bandwidth limit removed for {client} successfully."
             }
 
+        # 2. Create and enable IFB device for Ingress Shaping
+        subprocess.run(["docker", "exec", client, "ip", "link", "add", "name", "ifb0", "type", "ifb"], capture_output=True, text=True, check=False)
+        subprocess.run(["docker", "exec", client, "ip", "link", "set", "dev", "ifb0", "up"], capture_output=True, text=True, check=False)
+
+        # 3. Add ingress qdisc on eth0 and redirect ingress traffic to ifb0
+        subprocess.run(["docker", "exec", client, "tc", "qdisc", "add", "dev", "eth0", "handle", "ffff:", "ingress"], capture_output=True, text=True, check=False)
+        subprocess.run(["docker", "exec", client, "tc", "filter", "add", "dev", "eth0", "parent", "ffff:", "protocol", "ip", "u32", "match", "u32", "0", "0", "action", "mirred", "egress", "redirect", "dev", "ifb0"], capture_output=True, text=True, check=False)
+
+        # 4. Apply TBF qdisc on ifb0 (Ingress Shaping)
+        res_ing = subprocess.run(["docker", "exec", client, "tc", "qdisc", "replace", "dev", "ifb0", "root", "tbf", "rate", rate, "burst", "32kbit", "latency", "400ms"], capture_output=True, text=True, check=False)
+
+        # 5. Apply TBF qdisc on eth0 (Egress Shaping)
+        res_egr = subprocess.run(["docker", "exec", client, "tc", "qdisc", "replace", "dev", "eth0", "root", "tbf", "rate", rate, "burst", "32kbit", "latency", "400ms"], capture_output=True, text=True, check=False)
+
+        if res_ing.returncode == 0 and res_egr.returncode == 0:
+            return {
+                "status": "success",
+                "action": "limit_bandwidth",
+                "client": client,
+                "rate": rate,
+                "message": f"Bi-directional (ingress & egress) bandwidth limited to {rate} successfully."
+            }
+
+        err_msg = (res_ing.stderr or res_egr.stderr or "Failed to configure tc qdiscs").strip()
         return {
             "status": "failure",
             "action": "limit_bandwidth",
             "client": client,
             "rate": rate,
-            "message": result.stderr.strip()
+            "message": err_msg
         }
 
     except (ValueError, RuntimeError) as error:
@@ -301,6 +330,7 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "rate": rate,
             "message": str(error)
         }
+
 
 
 # --------------------------------------------------

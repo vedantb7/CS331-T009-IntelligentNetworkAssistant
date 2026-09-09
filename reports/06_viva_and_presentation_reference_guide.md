@@ -41,8 +41,8 @@ It contains **30+ high-yield viva questions with precise answers**, a **live ter
   4. `add rule bridge network_filter forward ip saddr @blocked_clients drop` — Drops frames where source IP matches the set.
   5. `add rule bridge network_filter forward ip daddr @blocked_clients drop` — Drops frames where destination IP matches the set.
 
-#### Q7: How does `unblock_client` restore network access?
-* **Answer**: It executes `nft delete element bridge network_filter blocked_clients { <client_ip> }`, removing the target IP from the set. Sub-second frame processing resumes immediately without clearing or flushing other rules.
+#### Q7: How does `unblock_client` restore network access and bandwidth?
+* **Answer**: It executes `nft delete element bridge network_filter blocked_clients { <client_ip> }` to remove the target IP from the firewall set, and calls `_cleanup_tc_qdiscs(<client>)` to strip all `tc` queuing disciplines (`eth0` root, `eth0` ingress, `ifb0` root) and delete the `ifb0` pseudo-device. This restores both full Layer-2 connectivity and unthrottled line-speed bandwidth (>70–80 Gbps).
 
 ---
 
@@ -51,11 +51,22 @@ It contains **30+ high-yield viva questions with precise answers**, a **live ter
 #### Q8: What Linux queuing discipline (qdisc) is used for bandwidth throttling, and how does it operate?
 * **Answer**: INA uses the **Token Bucket Filter (`tbf`)** qdisc. TBF accumulates tokens in a virtual bucket at a constant rate ($R$). Packets can only be transmitted if sufficient tokens exist in the bucket. Excess packets wait in a queue buffer up to a latency threshold ($L = 400\text{ms}$) before being dropped.
 
-#### Q9: What is the exact `tc` command executed for bandwidth limiting?
+#### Q9: What are the exact `tc` commands executed for bandwidth limiting?
 * **Answer**:
   ```bash
+  # Egress shaping on eth0
   docker exec client1 tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
+
+  # Ingress shaping via IFB redirect
+  docker exec client1 ip link add dev ifb0 type ifb
+  docker exec client1 ip link set dev ifb0 up
+  docker exec client1 tc qdisc add dev eth0 handle ffff: ingress
+  docker exec client1 tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+  docker exec client1 tc qdisc replace dev ifb0 root tbf rate 5mbit burst 32kbit latency 400ms
   ```
+
+#### Q9b: How does INA overcome the limitation that `tc qdisc` only shapes egress traffic?
+* **Answer**: Linux `tc qdisc` applies to egress traffic by default. INA solves this by creating an **Intermediate Functional Block (`ifb0`)** pseudo-device in the container, redirecting all incoming packets on `eth0` to `ifb0` via `tc filter mirred egress redirect dev ifb0`, and placing a TBF qdisc on `ifb0` root. This ensures both incoming and outgoing bandwidth are throttled to the requested rate.
 
 #### Q10: What is the purpose of the `burst` parameter in `tc tbf`?
 * **Answer**: `burst 32kbit` defines the maximum size of the token bucket. It specifies the peak amount of data that can be transmitted instantaneously at unthrottled line speed before token replenishment limits the flow to the configured rate ($5\text{ Mbps}$).
@@ -107,8 +118,14 @@ docker exec network-controller nft list ruleset
 
 ### 3. Inspect Active Traffic Control (`tc`) Qdisc Rules
 ```bash
-# View active qdisc on client1 eth0
+# View active egress qdisc on client1 eth0
 docker exec client1 tc qdisc show dev eth0
+
+# View active ingress redirection filter on client1 eth0
+docker exec client1 tc filter show dev eth0 parent ffff:
+
+# View active ingress qdisc on client1 ifb0
+docker exec client1 tc qdisc show dev ifb0
 
 # View detailed queue statistics (packets dropped, bytes sent)
 docker exec client1 tc -s qdisc show dev eth0
@@ -119,8 +136,11 @@ docker exec client1 tc -s qdisc show dev eth0
 # Ensure iperf3 server daemon is running on server container
 docker exec -d server iperf3 -s
 
-# Run 5-second throughput benchmark from client1 to server
+# Run 5-second egress throughput benchmark from client1 to server
 docker exec client1 iperf3 -c 172.20.0.3 -t 5
+
+# Run 5-second ingress throughput benchmark (reverse mode)
+docker exec client1 iperf3 -c 172.20.0.3 -t 5 -R
 ```
 
 ### 5. Inspect Audit Logs & Governance Decisions
@@ -155,7 +175,7 @@ python3 -c "from policy.audit_log import explain_action; print(explain_action())
 |  Slide 3: Network Topology & Kernel Enforcement (3 mins)              |
 |  - Explain Docker bridge project-net (172.20.0.0/24) & veth pairs.    |
 |  - Layer-2 nftables bridge set filtering (table bridge network_filter).|
-|  - Traffic Control tc tbf egress shaping (rate, burst, latency).      |
+|  - Bi-directional tc tbf shaping (eth0 egress + IFB mirred ingress).  |
 +-----------------------------------------------------------------------+
                                   │
                                   ▼
@@ -170,7 +190,7 @@ python3 -c "from policy.audit_log import explain_action; print(explain_action())
 +-----------------------------------------------------------------------+
 |  Slide 5: Conclusion & Future Scope (1 min)                           |
 |  - Empirical validation (ping/iperf3) guarantees state convergence.    |
-|  - Future: eBPF/XDP filtering, IFB ingress shaping, dynamic CNI.      |
+|  - Future: eBPF/XDP filtering, dynamic CNI plugins.                   |
 +-----------------------------------------------------------------------+
 ```
 
@@ -181,8 +201,8 @@ python3 -c "from policy.audit_log import explain_action; print(explain_action())
 ### Scenario 1: The examiner asks "Why didn't you write an eBPF program instead of using `nftables`?"
 * **Defense Strategy**: Acknowledge that eBPF/XDP provides superior wire-speed performance, but explain that `nftables` bridge hooks were selected for INA because `nftables` is natively available across standard Linux kernels without requiring LLVM/Clang eBPF bytecode compilation toolchains inside lightweight containers. Mention eBPF as a planned future improvement (as detailed in Report 05).
 
-### Scenario 2: The examiner asks "What happens if a container changes its IP address?"
-* **Defense Strategy**: Explain that INA uses static IP assignments configured in [`network/docker-compose.yml`](file:///home/dhruv/Documents/ina/network/docker-compose.yml) to maintain strict mapping between hostnames (`client1`) and IP addresses (`172.20.0.2`). Note that integrating the Docker Engine API event stream (`docker.from_env()`) is the recommended resolution for dynamic DHCP environments.
+### Scenario 2: The examiner asks "What happens if a container changes its IP address or container ID?"
+* **Defense Strategy**: Explain that INA uses the **Docker SDK for Python** (`docker.from_env()`) in [`network/discovery.py`](file:///home/dhruv/Documents/ina/network/discovery.py) to perform dynamic container discovery at runtime. When a tool command or validation check is executed, INA queries the Docker Engine API to dynamically inspect active container interfaces and resolve the container's real-time IP address on `project-net`.
 
 ### Scenario 3: The examiner asks "Why is your bandwidth validation tolerance set to 20%?"
 * **Defense Strategy**: Explain that TCP congestion control (e.g. CUBIC/Reno) requires an initial slow-start phase to scale up congestion window size (`cwnd`). In short 5-second test runs, slow-start warmup overhead and Linux kernel qdisc scheduling granularity produce a slight variance around nominal rates, making $\pm 20\%$ an empirically sound tolerance window.

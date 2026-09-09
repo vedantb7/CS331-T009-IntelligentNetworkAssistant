@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, Optional
 try:
+    # pyrefly: ignore [missing-import]
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
@@ -699,6 +700,7 @@ def _try_openai(system_prompt: str, user_text: str, max_tokens: int = 300) -> Op
         return None
 
     try:
+        # pyrefly: ignore [missing-import]
         from openai import OpenAI
     except ImportError:
         return None
@@ -855,7 +857,7 @@ _BLOCK_RE = re.compile(
     re.IGNORECASE,
 )
 _UNBLOCK_RE = re.compile(
-    r"\b(?:unblock|restore)\b\s+(?P<target>[a-zA-Z0-9_\-]+)",
+    r"\b(?:unblock|restore|unlimit|un-limit|reset)\b.*?(?P<target>client\d+|server|network-controller|[a-zA-Z0-9_\-]+)",
     re.IGNORECASE,
 )
 _LIMIT_RE = re.compile(

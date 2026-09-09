@@ -11,6 +11,7 @@ sys.path.insert(
 )
 
 import pytest
+# pyrefly: ignore [missing-import]
 from pydantic import ValidationError
 
 from validation.models import ValidationRequest, ValidationResult
@@ -250,7 +251,7 @@ def test_bandwidth_measured_rate_within_tolerance_pass():
     the allowed ±20% tolerance.
     """
 
-    def mock_run_iperf(client, server_ip):
+    def mock_run_iperf(client, server_ip, reverse=False):
         return 10.0
 
     original_run_iperf = monitor.run_iperf
@@ -335,7 +336,7 @@ def test_bandwidth_outside_tolerance_fail():
     Simulate an iperf3 result outside the allowed ±20% range.
     """
 
-    def mock_run_iperf(client, server_ip):
+    def mock_run_iperf(client, server_ip, reverse=False):
         return 15.0
 
     original_run_iperf = monitor.run_iperf

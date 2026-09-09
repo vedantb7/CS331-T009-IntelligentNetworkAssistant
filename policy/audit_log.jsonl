@@ -62,3 +62,26 @@
 {"timestamp": "2026-09-10T00:18:54", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 unblocked successfully."}
 {"timestamp": "2026-09-10T00:19:12", "action": "get_status", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Status query permitted for 'client2'."}
 {"timestamp": "2026-09-10T00:19:12", "action": "get_status", "params": {"client": "client2"}, "status": "APPLIED", "reason": "client2 (172.20.0.4) is reachable."}
+{"timestamp": "2026-09-10T00:42:32", "action": "limit_bandwidth", "params": {"client": "client2", "rate_mbps": 8, "rate": "8mbit"}, "status": "ALLOWED", "reason": "8.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T00:42:33", "action": "limit_bandwidth", "params": {"client": "client2", "rate_mbps": 8, "rate": "8mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 8mbit successfully."}
+{"timestamp": "2026-09-10T00:47:05", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:47:05", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 is already unblocked."}
+{"timestamp": "2026-09-10T00:47:24", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:47:24", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 is already unblocked."}
+{"timestamp": "2026-09-10T00:47:58", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:47:58", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 is already unblocked."}
+{"timestamp": "2026-09-10T00:49:53", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:49:53", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 is already unblocked."}
+{"timestamp": "2026-09-10T00:51:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 9, "rate": "9mbit"}, "status": "ALLOWED", "reason": "9.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T00:51:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 9, "rate": "9mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 9mbit successfully."}
+{"timestamp": "2026-09-10T00:52:18", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:52:18", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 is already unblocked."}
+{"timestamp": "2026-09-10T00:54:56", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T00:55:01", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T00:55:01", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T00:57:17", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T00:57:17", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T00:58:11", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 9, "rate": "9mbit"}, "status": "ALLOWED", "reason": "9.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T00:58:12", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 9, "rate": "9mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 9mbit successfully."}
+{"timestamp": "2026-09-10T00:59:19", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T00:59:19", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
