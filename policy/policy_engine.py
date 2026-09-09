@@ -3,6 +3,7 @@
 
 import yaml           # to read the rules.yaml file
 import os              # to build the file path safely
+import math
 from dataclasses import dataclass   # to create a simple result object
 
 # Path to rules.yaml, assuming this file sits next to it in policy/
@@ -11,9 +12,10 @@ RULES_PATH = os.path.join(os.path.dirname(__file__), "rules.yaml")
 
 @dataclass
 class PolicyResult:
-    # Holds the decision (True/False) and the reason behind it
+    # Holds the decision, reason, and the rule responsible for the decision
     allowed: bool
     reason: str
+    rule_id: str = ""
 
 
 def load_policy():
@@ -40,56 +42,131 @@ def check_policy(action: str, params: dict) -> PolicyResult:
 
     # Step 1: reject immediately if the action isn't in our allowed list
     if action not in policy.get("allowed_actions", []):
-        return PolicyResult(False, f"Action '{action}' is not in the list of allowed actions.")
-
+        return PolicyResult(
+            False,
+            f"Action '{action}' is not in the list of allowed actions.",
+            "action-not-allowed"
+        )
     # Step 2: handle "block_client" requests
     if action == "block_client":
         client = params.get("client")
 
+        # reject if client name is missing or invalid
+        if not client or not isinstance(client, str):
+            return PolicyResult(
+                False,
+                "A valid client name is required.",
+                "invalid-client"
+            )
+
         # reject if the client name doesn't exist in our network at all
         if client not in policy.get("known_clients", []):
-            return PolicyResult(False, f"'{client}' is not a recognized client in this network.")
+            return PolicyResult(
+                False,
+                f"'{client}' is not a recognized client in this network.",
+                "known-client"
+            )
 
         # reject if the client is on the protected list
         if client in policy.get("protected_clients", []):
-            return PolicyResult(False, f"'{client}' is a protected client and cannot be blocked.")
+            return PolicyResult(
+                False,
+                f"'{client}' is a protected client and cannot be blocked.",
+                "protected-client"
+            )
 
         # otherwise it's allowed
-        return PolicyResult(True, f"'{client}' is not protected. Block permitted.")
+        return PolicyResult(
+            True,
+            f"'{client}' is not protected. Block permitted.",
+            "block-allowed"
+        )
 
     # Step 3: handle "unblock_client" requests
     if action == "unblock_client":
         client = params.get("client")
 
+        if not client or not isinstance(client, str):
+            return PolicyResult(
+                False,
+                "A valid client name is required.",
+                "invalid-client"
+            )
+
         if client not in policy.get("known_clients", []):
-            return PolicyResult(False, f"'{client}' is not a recognized client in this network.")
+            return PolicyResult(
+                False,
+                f"'{client}' is not a recognized client in this network.",
+                "known-client"
+            )
 
         # unblocking is always safe (it restores normal access), so just allow it
-        return PolicyResult(True, f"Unblock permitted for '{client}'.")
+        return PolicyResult(
+            True,
+            f"Unblock permitted for '{client}'.",
+            "unblock-allowed"
+        )
 
     if action == "get_status":
         client = params.get("client")
+
+        if not client or not isinstance(client, str):
+            return PolicyResult(
+                False,
+                "A valid client name is required.",
+                "invalid-client"
+            )
+
         if client not in policy.get("known_clients", []):
-            return PolicyResult(False, f"'{client}' is not a recognized client in this network.")
-        return PolicyResult(True, f"Status query permitted for '{client}'.")
+            return PolicyResult(
+                False,
+                f"'{client}' is not a recognized client in this network.",
+                "known-client"
+            )
+
+        return PolicyResult(
+            True,
+            f"Status query permitted for '{client}'.",
+            "status-query"
+        )
 
     # Step 4: handle "limit_bandwidth" requests
     if action == "limit_bandwidth":
         client = params.get("client")
         rate = params.get("rate")
 
+        if not client or not isinstance(client, str):
+            return PolicyResult(
+                False,
+                "A valid client name is required.",
+                "invalid-client"
+            )
+
         if client not in policy.get("known_clients", []):
-            return PolicyResult(False, f"'{client}' is not a recognized client in this network.")
+            return PolicyResult(
+                False,
+                f"'{client}' is not a recognized client in this network.",
+                "known-client"
+            )
 
         if client in policy.get("protected_clients", []):
-            return PolicyResult(False, f"'{client}' is protected; its bandwidth cannot be changed.")
+            return PolicyResult(
+                False,
+                f"'{client}' is protected; its bandwidth cannot be changed.",
+                "protected-client"
+            )
 
         # try converting the rate to a number; reject if it's not understandable
         try:
             rate_val = _parse_mbit(rate)
         except (TypeError, ValueError):
-            return PolicyResult(False, f"Could not understand rate value '{rate}'.")
-
+            return PolicyResult(False, f"Could not understand rate value '{rate}'.", "bandwidth-format")
+        if not math.isfinite(rate_val) or rate_val <= 0:
+            return PolicyResult(
+                False,
+                "Bandwidth rate must be a positive finite value.",
+                "invalid-bandwidth"
+            )
         # get the min/max limits from the rulebook
         min_val = _parse_mbit(policy["bandwidth"]["minimum"])
         max_val = _parse_mbit(policy["bandwidth"]["maximum"])
@@ -98,11 +175,19 @@ def check_policy(action: str, params: dict) -> PolicyResult:
         if not (min_val <= rate_val <= max_val):
             return PolicyResult(
                 False,
-                f"Requested rate {rate_val}mbit is outside the allowed range ({min_val}mbit - {max_val}mbit)."
+                f"Requested rate {rate_val}mbit is outside the allowed range ({min_val}mbit - {max_val}mbit).",
+                "bandwidth-bounds"
             )
 
         # otherwise it's allowed
-        return PolicyResult(True, f"{rate_val}mbit is within allowed range. Limit permitted.")
-
+        return PolicyResult(
+            True,
+            f"{rate_val}mbit is within allowed range. Limit permitted.",
+            "bandwidth-allowed"
+        )
     # fallback (should rarely be reached, since Step 1 already filters unknown actions)
-    return PolicyResult(False, f"Unrecognized action '{action}'.")
+    return PolicyResult(
+        False,
+        f"Unrecognized action '{action}'.",
+        "unknown-action"
+    )
