@@ -1,12 +1,5 @@
 import subprocess
-
-
-# Client IPs in the Docker network
-CLIENT_IPS = {
-    "client1": "172.20.0.2",
-    "client2": "172.20.0.4"
-}
-SERVER_IP = "172.20.0.3"
+from network.discovery import get_container_ip
 
 
 # --------------------------------------------------
@@ -84,20 +77,13 @@ def _initialize_bridge_filter() -> tuple[bool, str]:
 
 
 # --------------------------------------------------
+# --------------------------------------------------
 # Block client
 # --------------------------------------------------
 
 def block_client(client: str) -> dict:
     try:
-        if client not in CLIENT_IPS:
-            return {
-                "status": "failure",
-                "action": "block_client",
-                "client": client,
-                "message": f"Client {client} not found in the network."
-            }
-
-        client_ip = CLIENT_IPS[client]
+        client_ip = get_container_ip(client)
 
         # Make sure the nftables bridge filter exists.
         initialized, message = _initialize_bridge_filter()
@@ -149,6 +135,14 @@ def block_client(client: str) -> dict:
             "message": result.stderr.strip()
         }
 
+    except (ValueError, RuntimeError) as error:
+        return {
+            "status": "failure",
+            "action": "block_client",
+            "client": client,
+            "message": str(error)
+        }
+
     except FileNotFoundError:
         return {
             "status": "failure",
@@ -172,15 +166,7 @@ def block_client(client: str) -> dict:
 
 def unblock_client(client: str) -> dict:
     try:
-        if client not in CLIENT_IPS:
-            return {
-                "status": "failure",
-                "action": "unblock_client",
-                "client": client,
-                "message": f"Client {client} not found in the network."
-            }
-
-        client_ip = CLIENT_IPS[client]
+        client_ip = get_container_ip(client)
 
         # Remove the client's IP from the blocked set.
         command = [
@@ -222,6 +208,14 @@ def unblock_client(client: str) -> dict:
             "message": result.stderr.strip()
         }
 
+    except (ValueError, RuntimeError) as error:
+        return {
+            "status": "failure",
+            "action": "unblock_client",
+            "client": client,
+            "message": str(error)
+        }
+
     except FileNotFoundError:
         return {
             "status": "failure",
@@ -244,16 +238,10 @@ def unblock_client(client: str) -> dict:
 # --------------------------------------------------
 
 def limit_bandwidth(client: str, rate: str) -> dict:
-    if client not in CLIENT_IPS:
-        return {
-            "status": "failure",
-            "action": "limit_bandwidth",
-            "client": client,
-            "rate": rate,
-            "message": f"Unknown client: {client}."
-        }
-
     try:
+        # Dynamically verify container existence & IP
+        _ = get_container_ip(client)
+
         command = [
             "docker", "exec", client,
             "tc", "qdisc", "replace", "dev", "eth0",
@@ -287,6 +275,15 @@ def limit_bandwidth(client: str, rate: str) -> dict:
             "message": result.stderr.strip()
         }
 
+    except (ValueError, RuntimeError) as error:
+        return {
+            "status": "failure",
+            "action": "limit_bandwidth",
+            "client": client,
+            "rate": rate,
+            "message": str(error)
+        }
+
     except FileNotFoundError:
         return {
             "status": "failure",
@@ -311,19 +308,10 @@ def limit_bandwidth(client: str, rate: str) -> dict:
 # --------------------------------------------------
 
 def get_status(client: str) -> dict:
-    known = {**CLIENT_IPS, "server": SERVER_IP}
-    if client not in known:
-        return {
-            "status": "failure",
-            "action": "get_status",
-            "client": client,
-            "message": f"Client {client} not found in the network."
-        }
-
-    client_ip = known[client]
-    source = "client1" if client == "server" else "server"
-
     try:
+        client_ip = get_container_ip(client)
+        source = "client1" if client == "server" else "server"
+
         result = subprocess.run(
             ["docker", "exec", source, "ping", "-c", "1", "-W", "1", client_ip],
             capture_output=True,
@@ -341,6 +329,13 @@ def get_status(client: str) -> dict:
                 else f"{client} ({client_ip}) is unreachable."
             ),
             "reachable": reachable,
+        }
+    except (ValueError, RuntimeError) as error:
+        return {
+            "status": "failure",
+            "action": "get_status",
+            "client": client,
+            "message": str(error)
         }
     except FileNotFoundError:
         return {

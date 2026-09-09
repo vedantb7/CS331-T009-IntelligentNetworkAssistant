@@ -6,15 +6,9 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import subprocess
 import json
 from validation.models import ValidationRequest, ValidationResult
+from network.discovery import get_container_ip, list_known_clients
 
 import re
-
-# client and server ip addresses
-CLIENT_IPS = {
-    "client1": "172.20.0.2",
-    "client2": "172.20.0.4",
-    "server": "172.20.0.3"
-}
 
 # initialized variables
 PING_COUNT = 3 # no. of pings to perform in each ping command
@@ -25,9 +19,10 @@ BANDWIDTH_TEST_DURATION = 5
 BANDWIDTH_TOLERANCE = 0.20
 
 def get_ip(client):
-    if client not in CLIENT_IPS:
+    try:
+        return get_container_ip(client)
+    except (ValueError, RuntimeError) as err:
         raise ValueError(f"Unknown client: {client}")
-    return CLIENT_IPS[client]
 
 def pick_source_container(target_client):
     """
@@ -44,13 +39,28 @@ def pick_source_container(target_client):
     block rule is actually enforced — the same reason check_bandwidth()
     already runs iperf3 via `docker exec` instead of from the host.
     """
-    if target_client not in CLIENT_IPS:
-        raise ValueError(f"unknown client: {target_client}")
+    # Verify target container IP / existence
+    _ = get_ip(target_client)
 
-    for candidate in ("server", "client1", "client2"):
-        if candidate != target_client and candidate in CLIENT_IPS:
-            return candidate
+    try:
+        known = list_known_clients()
+    except Exception:
+        known = {}
+
+    candidates = ["server", "client1", "client2"]
+    for c in known.keys():
+        if c not in candidates:
+            candidates.append(c)
+
+    for candidate in candidates:
+        if candidate != target_client:
+            try:
+                get_container_ip(candidate)
+                return candidate
+            except Exception:
+                continue
     raise ValueError(f"No available source container to ping from for target '{target_client}'.")
+
 
 def run_ping(source_container, target_ip):
     result = subprocess.run(
@@ -233,7 +243,7 @@ def run_iperf(client, server_ip):
 def check_bandwidth(client, expected_rate):
     target_ip = get_ip(client)
     expected_mbps = parse_rate(expected_rate)
-    server_ip = CLIENT_IPS["server"]
+    server_ip = get_ip("server")
     measured_mbps = run_iperf(client, server_ip)
 
     passed = bandwidth_within_tolerance(measured_mbps, expected_mbps)

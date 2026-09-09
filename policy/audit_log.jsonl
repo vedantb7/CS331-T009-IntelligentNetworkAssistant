@@ -42,3 +42,23 @@
 {"timestamp": "2026-09-08T11:21:08", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "client1 (172.20.0.2) is reachable."}
 {"timestamp": "2026-09-08T11:23:46", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 1, "rate": "1mbit"}, "status": "ALLOWED", "reason": "1.0mbit is within allowed range. Limit permitted."}
 {"timestamp": "2026-09-08T11:23:46", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 1, "rate": "1mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 1mbit successfully."}
+{"timestamp": "2026-09-10T00:11:25", "action": "get_status", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Status query permitted for 'client1'."}
+{"timestamp": "2026-09-10T00:11:25", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "client1 (172.20.0.2) is reachable."}
+{"timestamp": "2026-09-10T00:11:38", "action": "block_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "'client2' is not protected. Block permitted."}
+{"timestamp": "2026-09-10T00:11:38", "action": "block_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T00:12:46", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:12:46", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 unblocked successfully."}
+{"timestamp": "2026-09-10T00:13:36", "action": "limit_bandwidth", "params": {"client": "client2", "rate_mbps": 7, "rate": "7mbit"}, "status": "ALLOWED", "reason": "7.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T00:13:36", "action": "limit_bandwidth", "params": {"client": "client2", "rate_mbps": 7, "rate": "7mbit"}, "status": "APPLIED", "reason": "Bandwidth limited to 7mbit successfully."}
+{"timestamp": "2026-09-10T00:17:51", "action": "get_status", "params": {"client": "server"}, "status": "ALLOWED", "reason": "Status query permitted for 'server'."}
+{"timestamp": "2026-09-10T00:17:51", "action": "get_status", "params": {"client": "server"}, "status": "APPLIED", "reason": "server (172.20.0.3) is reachable."}
+{"timestamp": "2026-09-10T00:18:01", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client and cannot be blocked."}
+{"timestamp": "2026-09-10T00:18:09", "action": "block_client", "params": {"client": "cleint2"}, "status": "DENIED", "reason": "'cleint2' is not a recognized client in this network."}
+{"timestamp": "2026-09-10T00:18:17", "action": "block_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "'client2' is not protected. Block permitted."}
+{"timestamp": "2026-09-10T00:18:17", "action": "block_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T00:18:37", "action": "get_status", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Status query permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:18:38", "action": "get_status", "params": {"client": "client2"}, "status": "APPLIED", "reason": "client2 (172.20.0.4) is unreachable."}
+{"timestamp": "2026-09-10T00:18:54", "action": "unblock_client", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:18:54", "action": "unblock_client", "params": {"client": "client2"}, "status": "APPLIED", "reason": "Client client2 unblocked successfully."}
+{"timestamp": "2026-09-10T00:19:12", "action": "get_status", "params": {"client": "client2"}, "status": "ALLOWED", "reason": "Status query permitted for 'client2'."}
+{"timestamp": "2026-09-10T00:19:12", "action": "get_status", "params": {"client": "client2"}, "status": "APPLIED", "reason": "client2 (172.20.0.4) is reachable."}

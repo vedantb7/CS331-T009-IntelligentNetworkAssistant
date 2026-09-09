@@ -74,11 +74,12 @@ docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' serv
 
 ---
 
-## 7. Verify monitor.py Client Mappings
-Verify that the `CLIENT_IPS` dictionary inside `validation/monitor.py` matches the active container network:
+## 7. Verify Dynamic Container Discovery
+Verify dynamic Docker container resolution via `network/discovery.py`:
 ```bash
-grep -A 5 "CLIENT_IPS =" validation/monitor.py
+python3 -c "from network.discovery import list_known_clients; print(list_known_clients())"
 ```
+
 
 ---
 

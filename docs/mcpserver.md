@@ -40,14 +40,18 @@ Contains the actual network operations:
 * `unblock_client()` → `iptables` on the Docker host
 * `limit_bandwidth()` → `tc` inside the target container
 
-Client IP mapping:
+Dynamic Client Discovery:
+
+Instead of relying on a hardcoded IP dictionary, the MCP tools resolve container network addresses dynamically at runtime using the **Docker SDK for Python** (`docker.from_env()`) via `network.discovery.get_container_ip(client)`:
 
 ```python
-CLIENT_IPS = {
-    "client1": "172.20.0.2",
-    "client2": "172.20.0.4"
-}
+from network.discovery import get_container_ip
+
+# Dynamically resolves target container IP address from Docker Engine API
+client_ip = get_container_ip(client)
 ```
+
+This ensures that container IP changes or network restarts are automatically resolved without requiring code modifications.
 
 ---
 
