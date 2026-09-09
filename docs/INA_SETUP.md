@@ -1,645 +1,140 @@
-# Intelligent Network Assistant (INA) — Setup Guide
+# Intelligent Network Assistant (INA) — Setup & Operation Guide
 
-This guide explains how to run the Intelligent Network Assistant locally from an existing project directory.
+This guide provides step-by-step instructions to set up, run, verify, and troubleshoot the **Intelligent Network Configuration Assistant (INA)**.
 
-The project accepts natural-language network requests, uses an LLM to understand them, applies policy checks, executes network operations through MCP tools, validates the result, and returns a human-readable summary.
+---
 
-Example:
+## 1. Quick-Start & Project Setup
 
-```text
-network-assistant>: client1 is causing trouble, kick them off the network
-```
-
-The intended flow is:
-
-```text
-Natural-language request
-        ↓
-OpenRouter / LLM
-        ↓
-Intent parsing
-        ↓
-Policy engine
-        ↓
-MCP network tools
-        ↓
-Docker network
-        ↓
-Validation
-        ↓
-Human-readable response + audit information
-```
-
-## 1. Prerequisites
-
-You need:
-
-- Python 3
-- Git
-- Docker Desktop
-- VS Code (recommended)
-- An OpenRouter API key
-- The complete INA project directory
-
-Check Python:
-
+### Step 1: Prerequisites Check
+Ensure Python 3.10+, Docker, and Docker Compose are installed:
 ```bash
 python3 --version
-```
-
-Check Docker:
-
-```bash
 docker --version
 docker compose version
 ```
 
-Make sure Docker Desktop is running.
-
-## 2. Get an OpenRouter API key
-
-Create an account on OpenRouter and create an API key from its dashboard:
-
-https://openrouter.ai/
-
-OpenRouter supports using the key through the `OPENROUTER_API_KEY` environment variable.
-
-Example:
-
+### Step 2: Clone & Open Project Directory
 ```bash
-export OPENROUTER_API_KEY="sk-or-v1-..."
+cd /path/to/ina
 ```
 
-**Never commit your real API key to Git.**
-
-Do not hard-code it in Python source files.
-
-## 3. Open the project
-
-Open the existing project directory in VS Code.
-
-```bash
-cd <PROJECT_DIRECTORY>
-code .
-```
-
-From the project root, check:
-
-```bash
-ls
-```
-
-You should see the project's modules, including directories such as:
-
-```text
-assistant/
-mcp_server/
-network/
-```
-
-## 4. Create a Python virtual environment
-
-### macOS / Linux
-
+### Step 3: Set Up Python Virtual Environment
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-```
-
-If your system uses `python` for Python 3:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-### Windows PowerShell
-
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-```
-
-## 5. Install dependencies
-
-If the repository contains `requirements.txt`:
-
-```bash
 pip install -r requirements.txt
 ```
 
-Use the dependency file included in the repository if it has a different name.
-
-## 6. Configure the OpenRouter API key
-
-Set the key in the terminal where you will run INA.
-
-### macOS / Linux
+### Step 4: Configure API Credentials
+INA uses OpenRouter (or Anthropic/OpenAI) for LLM-based natural language intent parsing. Set your key:
 
 ```bash
-export OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
+# Linux / macOS
+export OPENROUTER_API_KEY="sk-or-v1-..."
+
+# Windows PowerShell
+$env:OPENROUTER_API_KEY="sk-or-v1-..."
 ```
+*(Note: If no API key is provided, INA automatically degrades gracefully to a deterministic regex parser.)*
 
-Verify without printing the secret:
-
-```bash
-python -c "import os; print('OPENROUTER_API_KEY is set' if os.getenv('OPENROUTER_API_KEY') else 'OPENROUTER_API_KEY is NOT set')"
-```
-
-### Windows PowerShell
-
-```powershell
-$env:OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
-```
-
-Verify:
-
-```powershell
-python -c "import os; print('OPENROUTER_API_KEY is set' if os.getenv('OPENROUTER_API_KEY') else 'OPENROUTER_API_KEY is NOT set')"
-```
-
-## 7. Start the Docker network
-
-From the project root:
+### Step 5: Start Docker Network Infrastructure
+Spin up the custom Docker bridge network (`network_project-net`) containing `client1`, `client2`, `server`, and `network-controller`:
 
 ```bash
 docker compose -f network/docker-compose.yml up -d --build
 ```
 
-Check the containers:
-
+Verify active containers:
 ```bash
 docker compose -f network/docker-compose.yml ps
 ```
 
-You should see containers similar to:
-
-```text
-client1
-client2
-network-controller
-server
+### Step 6: Launch the Intelligent Assistant
+Run the interactive client:
+```bash
+python3 -m assistant.client
 ```
 
-You can also run:
+Try natural-language network commands:
+* **Block client**: `block client1` or `client1 is causing trouble, kick them off`
+* **Unblock client**: `unblock client1` or `restore access for client1`
+* **Bandwidth limit**: `limit client1 to 5 Mbps` or `throttle client1 to 8 Mbps`
+* **Check status**: `check status of client1`
+
+---
+
+## 2. Automated Test Suite Verification
+
+To verify full system integrity, execute the automated PyTest suite covering container discovery, MCP tool execution, policy rules, and validation models:
 
 ```bash
-docker ps
+source .venv/bin/activate
+pytest -v
 ```
+*(Expected Result: 86 passed)*
 
-All required containers should have an `Up` status.
+---
 
-## 8. Verify the Docker network
+## 3. Manual Network Verification & Inspection
 
-List Docker networks:
+### 3.1 Verifying Layer-2 `nftables` Firewall Rules
+Block operations insert IPv4 addresses into an `nftables` bridge set (`@blocked_clients`) on `network-controller`.
 
 ```bash
-docker network ls
+# View active L2 bridge rules and blocked set elements
+docker exec network-controller nft list ruleset
+
+# Manually test ping block from sibling container (traverses bridge hook)
+docker exec client2 ping -c 3 172.20.0.2
 ```
 
-The project network will normally have a name similar to:
-
-```text
-network_project-net
-```
-
-Inspect it:
+### 3.2 Verifying Bi-Directional Traffic Control (`tc`) Bandwidth Throttling
+Bandwidth limiting configures Token Bucket Filters (`tbf`) on `eth0` (Egress) and an `ifb0` pseudo-device (Ingress via `mirred` redirect).
 
 ```bash
-docker network inspect network_project-net
-```
-
-Check a container's IP:
-
-```bash
-docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' client1
-```
-
-Check the server:
-
-```bash
-docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}' server
-```
-
-## 9. Test Docker connectivity
-
-Before running the AI agent, verify that the Docker network itself works.
-
-If the server IP is `172.20.0.3`, for example:
-
-```bash
-docker exec client1 ping -c 4 172.20.0.3
-```
-
-You want:
-
-```text
-4 packets transmitted, 4 received, 0% packet loss
-```
-
-If you get 100% packet loss, inspect:
-
-```bash
-docker network inspect network_project-net
-```
-
-and:
-
-```bash
-docker exec network-controller iptables -L DOCKER-USER -n -v
-```
-
-Remove any stale blocking rule for `client1` before continuing.
-
-## 10. Verify network-control tools
-
-Check that `iptables` exists in the network controller:
-
-```bash
-docker exec network-controller which iptables
-docker exec network-controller iptables --version
-```
-
-Check that `tc` exists in a client container:
-
-```bash
-docker exec client1 which tc
-```
-
-Check its current traffic-control configuration:
-
-```bash
+# Inspect egress qdisc on eth0
 docker exec client1 tc qdisc show dev eth0
-```
 
-## 11. Important: where network commands execute
-
-Different tools run in different containers.
-
-### Blocking / unblocking
-
-The `iptables` rules are applied through `network-controller`:
-
-```text
-Mac
- ↓
-docker exec network-controller
- ↓
-iptables
-```
-
-Conceptually:
-
-```bash
-docker exec network-controller iptables ...
-```
-
-### Bandwidth limiting
-
-The current implementation applies `tc` to the target client's `eth0`:
-
-```text
-Mac
- ↓
-docker exec client1
- ↓
-tc qdisc ...
- ↓
-client1 eth0
-```
-
-For example:
-
-```bash
+# Inspect ingress redirection filter & ingress qdisc on ifb0
+docker exec client1 tc filter show dev eth0 parent ffff:
 docker exec client1 tc qdisc show dev eth0
+docker exec client1 tc qdisc show dev ifb0
+
+# Measure throttled egress throughput (client1 -> server)
+docker exec client1 iperf3 -c 172.20.0.3 -t 5
+
+# Measure throttled ingress throughput (server -> client1 via reverse mode)
+docker exec client1 iperf3 -c 172.20.0.3 -t 5 -R
 ```
 
-Do not automatically move every networking command into `network-controller`.
+---
 
-## 12. Run the Intelligent Network Assistant
+## 4. Architecture & Command Execution Locations
 
-Make sure:
+| Network Operation | Execution Target Container | Low-Level Kernel Mechanism | Command Executed |
+| :--- | :--- | :--- | :--- |
+| **Block Client** | `network-controller` | `nftables` L2 Bridge Set | `nft add element bridge network_filter blocked_clients { <ip> }` |
+| **Unblock Client** | `network-controller` & Target Container | `nftables` & `tc` qdisc teardown | `nft delete element ...` & `_cleanup_tc_qdiscs()` |
+| **Limit Bandwidth** | Target Client (e.g. `client1`) | `tc tbf` + `ifb0` mirred redirect | `tc qdisc replace dev eth0 root tbf ...` & IFB redirect |
+| **IP Resolution** | Docker Daemon API | Docker SDK for Python | `docker.from_env().containers.get(client)` |
 
-1. Docker Desktop is running.
-2. `.venv` is activated.
-3. `OPENROUTER_API_KEY` is set.
-4. Docker containers are running.
+---
 
-Then:
+## 5. Troubleshooting Guide
+
+| Issue / Symptom | Probable Cause | Resolution |
+| :--- | :--- | :--- |
+| **Validation UNCONFIRMED** | `iperf3` server daemon stopped on `server` container. | Run `docker exec -d server iperf3 -s` to restart listener. |
+| **Host Ping False Positive** | Pinging from Host OS bypasses L2 bridge forward hook. | Always test ping from a sibling container (e.g. `docker exec client2 ping ...`). |
+| **Docker Permission Denied** | User not added to `docker` group or Docker Desktop down. | Ensure Docker Desktop is running or run with `sudo`. |
+| **LLM Intent Unknown** | Missing or invalid API key. | Set `OPENROUTER_API_KEY` or rely on deterministic regex fallback. |
+
+---
+
+## 6. Shutting Down the Environment
 
 ```bash
-python -m assistant.client
-```
-
-You should get an interactive prompt similar to:
-
-```text
-Interactive mode. Type a command, or 'exit' / 'quit' to leave.
-
-network-assistant>:
-```
-
-## 13. Try natural-language commands
-
-### Block a client
-
-```text
-client1 is causing trouble, kick them off the network
-```
-
-or:
-
-```text
-block client1
-```
-
-### Unblock a client
-
-```text
-let client1 back on the network
-```
-
-or:
-
-```text
-unblock client1
-```
-
-### Limit bandwidth
-
-```text
-client1 is using too much bandwidth, limit them to 5 Mbps
-```
-
-The LLM should interpret this as approximately:
-
-```text
-action=limit_bandwidth
-target=client1
-rate=5mbit
-```
-
-## 14. How to interpret the output
-
-A successful request should progress through stages similar to:
-
-```text
-Intent Parsing        OK
-Policy Check          ALLOW
-Execution             OK
-Validation            CONFIRMED
-```
-
-The final response should explain what happened in normal language.
-
-For example:
-
-```text
-You asked me to limit client1's bandwidth to 5 Mbps.
-The policy allowed the action, the network change was applied,
-and the result was successfully verified.
-```
-
-Exact wording depends on the project's response-generation logic.
-
-## 15. Troubleshooting: "Command not found"
-
-If you see:
-
-```text
-Execution (MCP) FAILED — Command not found
-```
-
-check where the command is being executed.
-
-For `iptables`:
-
-```bash
-docker exec network-controller which iptables
-```
-
-The MCP implementation should invoke it through Docker:
-
-```text
-docker exec network-controller iptables ...
-```
-
-rather than trying to run:
-
-```text
-iptables ...
-```
-
-directly on macOS.
-
-For `tc`:
-
-```bash
-docker exec client1 which tc
-```
-
-and make sure the MCP implementation invokes it through Docker.
-
-## 16. Troubleshooting: `iperf3 failed`
-
-You may see:
-
-```text
-Execution: OK
-Validation: UNCONFIRMED — iperf3 failed
-```
-
-This means the network operation may have executed, but validation could not verify it.
-
-Check:
-
-```bash
-docker exec client1 which iperf3
-docker exec server which iperf3
-```
-
-Also:
-
-```bash
-docker exec server ps aux
-```
-
-An HTTP server is not automatically an `iperf3` server. The validation setup must have an `iperf3` listener and the appropriate client/server configuration.
-
-Do not treat:
-
-```text
-Execution: OK
-```
-
-as equivalent to:
-
-```text
-Validation: CONFIRMED
-```
-
-Both stages matter.
-
-## 17. Troubleshooting: LLM cannot parse requests
-
-Check the API key:
-
-```bash
-python -c "import os; print(bool(os.getenv('OPENROUTER_API_KEY')))"
-```
-
-Expected:
-
-```text
-True
-```
-
-If it returns `False`, set the key again in the current terminal.
-
-If OpenRouter returns a model/endpoints error, check the model configured by the project and choose a currently available model on OpenRouter.
-
-## 18. API-key security
-
-Never commit your real API key.
-
-If using a `.env` file, add:
-
-```text
-.env
-```
-
-to `.gitignore`.
-
-Safe example:
-
-```text
-OPENROUTER_API_KEY=your_key_here
-```
-
-Do not commit the real value.
-
-Before committing:
-
-```bash
-git status
-```
-
-Make sure no secret-containing file is tracked.
-
-## 19. Stop the Docker environment
-
-When finished:
-
-```bash
+# Stop and remove containers and network bridge
 docker compose -f network/docker-compose.yml down
 ```
-
-Start it again later with:
-
-```bash
-docker compose -f network/docker-compose.yml up -d
-```
-
-Use `--build` when images need rebuilding:
-
-```bash
-docker compose -f network/docker-compose.yml up -d --build
-```
-
-## 20. Quick-start
-
-For a fresh setup:
-
-```bash
-cd <PROJECT_DIRECTORY>
-
-python3 -m venv .venv
-source .venv/bin/activate
-
-pip install -r requirements.txt
-
-export OPENROUTER_API_KEY="YOUR_OPENROUTER_API_KEY"
-
-docker compose -f network/docker-compose.yml up -d --build
-
-docker compose -f network/docker-compose.yml ps
-
-python -m assistant.client
-```
-
-Then try:
-
-```text
-client1 is causing trouble, kick them off the network
-```
-
-or:
-
-```text
-client1 is using too much bandwidth, limit them to 5 Mbps
-```
-
-## 21. Recommended troubleshooting order
-
-If something does not work, debug in this order:
-
-```text
-1. Python environment
-        ↓
-2. OpenRouter API key
-        ↓
-3. Docker Desktop
-        ↓
-4. Docker containers
-        ↓
-5. Docker network connectivity
-        ↓
-6. iptables / tc
-        ↓
-7. MCP execution
-        ↓
-8. Policy engine
-        ↓
-9. Validation / iperf3
-        ↓
-10. AI response generation
-```
-
-Do not debug the LLM first if the Docker network itself is not working.
-
-## 22. What a complete successful request looks like
-
-```text
-User
- │
- │ "client1 is using too much bandwidth, limit them to 5 Mbps"
- ▼
-OpenRouter / LLM
- │
- │ action=limit_bandwidth
- │ target=client1
- │ rate=5mbit
- ▼
-Policy Engine
- │
- │ ALLOW
- ▼
-MCP Tool
- │
- │ docker exec client1 tc ...
- ▼
-Docker Network
- │
- │ bandwidth limit applied
- ▼
-Validation
- │
- │ CONFIRMED
- ▼
-AI Response
- │
- ▼
-"client1 has been limited to 5 Mbps and the change was verified."
-```
-
-If execution succeeds but validation is `UNCONFIRMED`, the network action may have been applied but the validation environment still needs to be fixed.
