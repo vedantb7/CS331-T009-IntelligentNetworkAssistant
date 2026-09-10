@@ -341,3 +341,28 @@ def test_explain_action_returns_no_logs_message(
     explanation = explain_action()
 
     assert explanation == "No actions have been logged yet."
+
+
+# --------------------------------------------------
+# Status Policy Tests
+# --------------------------------------------------
+
+def test_status_query_for_known_client_is_allowed():
+    result = check_policy("get_status", {"client": "client1"})
+    assert result.allowed is True
+    assert "Status query permitted" in result.reason
+
+
+def test_network_wide_status_query_is_allowed():
+    result_empty = check_policy("get_status", {})
+    assert result_empty.allowed is True
+    assert "Network status query permitted" in result_empty.reason
+
+    result_all = check_policy("get_status", {"client": "all"})
+    assert result_all.allowed is True
+
+
+def test_status_query_for_unknown_client_is_denied():
+    result = check_policy("get_status", {"client": "unknown_client"})
+    assert result.allowed is False
+    assert "not a recognized client" in result.reason

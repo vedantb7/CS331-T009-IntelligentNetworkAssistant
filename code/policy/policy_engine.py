@@ -4,6 +4,7 @@
 import yaml           # to read the rules.yaml file
 import os              # to build the file path safely
 import math
+from typing import Any
 from dataclasses import dataclass   # to create a simple result object
 
 # Path to rules.yaml, assuming this file sits next to it in policy/
@@ -24,11 +25,29 @@ def load_policy():
         return yaml.safe_load(f)
 
 
+import re
+
+_RATE_FORMAT_RE = re.compile(r"^\d+(\.\d+)?\s*(kbit|mbit|gbit|kbps|mbps|mb/s|gbps)?$", re.IGNORECASE)
+_CLIENT_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
+
+
+def _is_valid_client_name(name: Any) -> bool:
+    if not isinstance(name, str):
+        return False
+    cleaned = name.strip()
+    return bool(_CLIENT_NAME_RE.match(cleaned)) and not cleaned.startswith("-")
+
+
 def _parse_mbit(value):
     # Converts "5mbit" (text) or 5 (number) into a plain float, e.g. 5.0
     if isinstance(value, (int, float)):
-        return float(value)
+        val = float(value)
+        if not math.isfinite(val) or val <= 0:
+            raise ValueError(f"Invalid rate number: {value}")
+        return val
     text = str(value).strip().lower()
+    if not _RATE_FORMAT_RE.match(text):
+        raise ValueError(f"Invalid rate format: '{value}'")
     for suffix in ("mbit", "mbps", "mb/s"):
         text = text.replace(suffix, "")
     return float(text.strip())
@@ -52,7 +71,7 @@ def check_policy(action: str, params: dict) -> PolicyResult:
         client = params.get("client")
 
         # reject if client name is missing or invalid
-        if not client or not isinstance(client, str):
+        if not _is_valid_client_name(client):
             return PolicyResult(
                 False,
                 "A valid client name is required.",
@@ -86,7 +105,7 @@ def check_policy(action: str, params: dict) -> PolicyResult:
     if action == "unblock_client":
         client = params.get("client")
 
-        if not client or not isinstance(client, str):
+        if not _is_valid_client_name(client):
             return PolicyResult(
                 False,
                 "A valid client name is required.",
@@ -110,7 +129,15 @@ def check_policy(action: str, params: dict) -> PolicyResult:
     if action == "get_status":
         client = params.get("client")
 
-        if not client or not isinstance(client, str):
+        # Allow network-wide status query when target is omitted, empty, or all/network
+        if not client or (isinstance(client, str) and client.strip().lower() in ("all", "network", "*", "status", "")):
+            return PolicyResult(
+                True,
+                "Network status query permitted.",
+                "status-query"
+            )
+
+        if not _is_valid_client_name(client):
             return PolicyResult(
                 False,
                 "A valid client name is required.",
@@ -135,7 +162,7 @@ def check_policy(action: str, params: dict) -> PolicyResult:
         client = params.get("client")
         rate = params.get("rate")
 
-        if not client or not isinstance(client, str):
+        if not _is_valid_client_name(client):
             return PolicyResult(
                 False,
                 "A valid client name is required.",

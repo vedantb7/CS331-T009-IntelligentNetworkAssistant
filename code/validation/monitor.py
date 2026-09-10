@@ -18,9 +18,15 @@ PING_REQUIRED_SUCCESS = 2 #
 BANDWIDTH_TEST_DURATION = 5
 BANDWIDTH_TOLERANCE = 0.20
 
+import ipaddress
+
 def get_ip(client):
+    if not isinstance(client, str) or not client.strip() or client.strip().startswith("-"):
+        raise ValueError(f"Unknown client: {client}")
     try:
-        return get_container_ip(client)
+        ip = get_container_ip(client.strip())
+        ipaddress.IPv4Address(ip)
+        return ip
     except (ValueError, RuntimeError) as err:
         raise ValueError(f"Unknown client: {client}")
 
@@ -63,32 +69,37 @@ def pick_source_container(target_client):
 
 
 def run_ping(source_container, target_ip):
-    result = subprocess.run(
-        [
-            "docker",
-            "exec",
-            source_container,
-            "ping",
-            "-c",
-            str(PING_COUNT),
-            "-W",
-            str(PING_TIMEOUT),
-            target_ip,
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    output = result.stdout + result.stderr
-
-    packet_loss = parse_packet_loss(output)
-
-    return {
-        "reachable": result.returncode == 0,
-        "packet_loss": packet_loss,
-        "output": output,
-    }
+    try:
+        result = subprocess.run(
+            [
+                "docker",
+                "exec",
+                source_container,
+                "ping",
+                "-c",
+                str(PING_COUNT),
+                "-W",
+                str(PING_TIMEOUT),
+                target_ip,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=10,
+        )
+        output = result.stdout + result.stderr
+        packet_loss = parse_packet_loss(output)
+        return {
+            "reachable": result.returncode == 0,
+            "packet_loss": packet_loss,
+            "output": output,
+        }
+    except subprocess.TimeoutExpired:
+        return {
+            "reachable": False,
+            "packet_loss": 100.0,
+            "output": "Ping command timed out",
+        }
 
 def check_block(client):
     target_ip = get_ip(client)
@@ -234,12 +245,17 @@ def run_iperf(client, server_ip, reverse: bool = False):
     if reverse:
         cmd.append("-R")
 
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True
-    )
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=BANDWIDTH_TEST_DURATION + 10,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError("iperf3 execution timed out.")
+
     if result.returncode != 0:
         raise RuntimeError(f"iperf3 failed: {(result.stderr or result.stdout).strip()}")
     return parse_iperf_result(result.stdout)

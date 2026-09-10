@@ -38,6 +38,22 @@ def get_docker_client():
         ) from err
 
 
+import re
+import ipaddress
+
+_CONTAINER_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
+
+
+def _validate_container_name(container_name: str) -> str:
+    """Ensure container name is a safe alphanumeric identifier without injection chars or leading dashes."""
+    if not isinstance(container_name, str):
+        raise ValueError("Container name must be a valid string.")
+    cleaned = container_name.strip()
+    if not cleaned or not _CONTAINER_NAME_RE.match(cleaned) or cleaned.startswith("-"):
+        raise ValueError(f"Invalid container identifier: '{container_name}'.")
+    return cleaned
+
+
 def get_container_info(container_name: str) -> Dict[str, Any]:
     """
     Retrieve dynamic runtime metadata for a specific container by name using Docker SDK.
@@ -52,13 +68,14 @@ def get_container_info(container_name: str) -> Dict[str, Any]:
         ValueError: If container does not exist or is not running.
         RuntimeError: If Docker daemon connection fails.
     """
+    valid_name = _validate_container_name(container_name)
     client = get_docker_client()
     try:
-        container = client.containers.get(container_name)
+        container = client.containers.get(valid_name)
     except NotFound:
         raise ValueError(f"Client '{container_name}' not found in Docker environment.")
     except APIError as err:
-        raise RuntimeError(f"Docker API error while inspecting '{container_name}': {err}") from err
+        raise RuntimeError(f"Docker API error while inspecting container.") from err
 
     state = container.status  # 'running', 'exited', 'paused', etc.
     if state != "running":
@@ -96,18 +113,27 @@ def get_container_ip(container_name: str, preferred_network: str = "project-net"
 
     # 1. Try exact or partial match for preferred_network (e.g. 'network_project-net' or 'project-net')
     for net_name, net_config in networks.items():
-        if preferred_network in net_name:
+        if preferred_network and preferred_network in net_name:
             ip = net_config.get("IPAddress", "").strip()
             if ip:
+                try:
+                    ipaddress.IPv4Address(ip)
+                except ValueError:
+                    raise ValueError(f"Invalid IP address format resolved for '{container_name}': {ip}")
                 return ip
 
-    # 2. Fallback: return the first non-empty IPv4 address found across any connected network
-    for net_name, net_config in networks.items():
-        ip = net_config.get("IPAddress", "").strip()
-        if ip:
-            return ip
+    # 2. Fallback only if preferred_network was empty or not specified
+    if not preferred_network:
+        for net_name, net_config in networks.items():
+            ip = net_config.get("IPAddress", "").strip()
+            if ip:
+                try:
+                    ipaddress.IPv4Address(ip)
+                except ValueError:
+                    raise ValueError(f"Invalid IP address format resolved for '{container_name}': {ip}")
+                return ip
 
-    raise ValueError(f"Container '{container_name}' has no assigned IPv4 address on any active network.")
+    raise ValueError(f"Container '{container_name}' has no assigned IPv4 address on network '{preferred_network}'.")
 
 
 def list_known_clients(preferred_network: str = "project-net") -> Dict[str, str]:

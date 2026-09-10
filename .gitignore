@@ -1,8 +1,8 @@
 .env
 .venv/
 __pycache__/
-
-# log files
-policy/audit_log.jsonl
+*.pyc
+.pytest_cache
 *.log
-*.jsonl
+policy/audit_log.jsonl
+.pytest_cache

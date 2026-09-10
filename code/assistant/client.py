@@ -2,30 +2,27 @@
 assistant/client.py
 ====================
 Intelligent Network Assistant — Orchestration & Integration layer.
-Owner: Ananya (AI Assistant, Intent Parsing, Orchestration & Integration)
 
 WHAT THIS FILE DOES
 --------------------
+1. Accepts user network intent commands in natural language or direct CLI syntax.
 2. Parses it into a structured Intent (action / target / params) using an
    LLM (via LiteLLM, Anthropic, or OpenAI SDKs — whichever is installed and
    configured) with a deterministic regex-based parser as a guaranteed
    fallback.
-3. Sends the Intent to Khushi's Policy Engine (`policy/policy_engine.py`)
+3. Sends the Intent to the Policy Engine (`policy/policy_engine.py`)
    for an ALLOW/DENY decision.
-4. If ALLOWed, executes the action against Vedant's MCP server
+4. If ALLOWed, executes the action against the MCP server
    (`mcp_server/tools.py` / `mcp_server/server.py`).
-5. Triggers Dhruv's validation layer (`validation/monitor.py`) to confirm
+5. Triggers the validation layer (`validation/monitor.py`) to confirm
    the network actually changed state (ping/iperf3-style check).
 6. Prints a clean, professional report to the terminal using `rich`.
 
 STANDALONE / MOCK MODE
 -----------------------
-Every teammate's module is imported defensively. If a module isn't on the
-PYTHONPATH yet (because Khushi/Vedant/Dhruv haven't pushed their code, or
-you're running this file in isolation), this script transparently falls
-back to a built-in, in-memory mock so you (Ananya) can develop and demo the
-full end-to-end flow right now. A small banner at startup tells you which
-mode each subsystem is running in.
+Every subsystem module is imported defensively. If a module is unavailable,
+this script transparently falls back to a built-in mock.
+A banner at startup displays the operational mode of each subsystem.
 
 USAGE
 -----
@@ -138,6 +135,7 @@ class ActionType(str, Enum):
     UNBLOCK_CLIENT = "unblock_client"
     LIMIT_BANDWIDTH = "limit_bandwidth"
     GET_STATUS = "get_status"
+    CONVERSATION = "conversation"
     UNKNOWN = "unknown"
 
 
@@ -275,11 +273,11 @@ class MockPolicyEngine:
                     rule_id="bandwidth-bounds",
                 )
 
-        if intent.action == ActionType.UNKNOWN:
+        if intent.action in (ActionType.UNKNOWN, ActionType.CONVERSATION):
             return PolicyDecision(
                 allowed=False,
-                reason="Could not confidently determine an action; refusing to act on an unknown intent.",
-                rule_id="reject-unknown-intent",
+                reason="Conversational or unknown intent; refusing to act on network.",
+                rule_id="reject-non-network-intent",
             )
 
         return PolicyDecision(allowed=True, reason="No policy violation detected.")
@@ -379,29 +377,53 @@ class MockMCPTools:
             "message": f"{target} bandwidth limited to {rate}.",
         }
 
-    async def get_status(self, target: str) -> Dict[str, Any]:
+    async def get_status(self, target: str = "") -> Dict[str, Any]:
         await asyncio.sleep(0.1)
-        state = self._state.get(target, {"blocked": False, "rate_limit_mbps": None})
-        return {"success": True, "command": f"tc -s qdisc show dev veth-{target}", "state": state}
+        target = (target or "").strip().lower()
+        clients_state = {}
+        for c in ("client1", "client2", "server"):
+            st = self._state.get(c, {"blocked": False, "rate_limit_mbps": None})
+            limit_str = f"{st['rate_limit_mbps']:g}mbit" if st.get("rate_limit_mbps") else "none"
+            fw_str = "blocked" if st.get("blocked") else ("protected" if c == "server" else "unblocked")
+            clients_state[c] = {
+                "ip": {"client1": "172.20.0.2", "client2": "172.20.0.4", "server": "172.20.0.3"}.get(c, "172.20.0.x"),
+                "status": "running",
+                "reachable": not st.get("blocked", False),
+                "firewall": fw_str,
+                "bandwidth_limit": limit_str,
+            }
+
+        if target and target not in ("all", "network", "*", "status"):
+            c_info = clients_state.get(target, {
+                "ip": "unknown", "status": "unknown", "reachable": False, "firewall": "unknown", "bandwidth_limit": "none"
+            })
+            return {
+                "success": True,
+                "status": "success",
+                "action": "get_status",
+                "client": target,
+                "network": {"name": "network_project-net", "available": True, "subnet": "172.20.0.0/24", "gateway": "172.20.0.1"},
+                "server": {"name": "server", "ip": "172.20.0.3", "status": "running", "reachable": True},
+                "clients": {target: c_info},
+                "message": f"Client '{target}' is {'reachable' if c_info['reachable'] else 'unreachable'}. Firewall: {c_info['firewall']}. Limit: {c_info['bandwidth_limit']}.",
+            }
+
+        return {
+            "success": True,
+            "status": "success",
+            "action": "get_status",
+            "client": "all",
+            "network": {"name": "network_project-net", "available": True, "subnet": "172.20.0.0/24", "gateway": "172.20.0.1"},
+            "server": {"name": "server", "ip": "172.20.0.3", "status": "running", "reachable": True},
+            "clients": clients_state,
+            "message": f"Network 'network_project-net' active. All {len(clients_state)} hosts operational.",
+        }
 
 
 class MCPToolsAdapter:
     """
-    Adapts Vedant's real mcp_server/tools.py to the interface the
-    orchestrator expects. Two gaps to bridge:
-
-      1. His functions signal outcome with `{"status": "success"/"failure"}`
-         rather than a boolean `{"success": ...}` key. Without this adapter,
-         `_execute()`'s generic dict-normalization would default a missing
-         "success" key to True — silently reporting failed iptables/tc
-         commands as successful. We translate the key here so that never
-         happens.
-      2. He hasn't implemented `get_status()` yet. Rather than crash with
-         an AttributeError (or worse, silently pretend to succeed), we
-         return a clear, honest failure explaining the feature is pending.
-
-    His functions are plain sync functions (not async), which the
-    orchestrator already supports via `_maybe_await`.
+    Adapts mcp_server/tools.py to the interface the orchestrator expects.
+    Normalizes status keys and execution results.
     """
 
     def __init__(self, tools_module) -> None:
@@ -419,12 +441,9 @@ class MCPToolsAdapter:
         return self._normalize(self._tools.unblock_client(target))
 
     def limit_bandwidth(self, target: str, rate: str, rate_mbps: Optional[float] = None) -> Dict[str, Any]:
-        # Vedant's limit_bandwidth only takes (client, rate); rate_mbps is
-        # accepted here purely so `_execute()`'s signature probing can call
-        # this adapter the same way it would call a richer implementation.
         return self._normalize(self._tools.limit_bandwidth(target, rate))
 
-    def get_status(self, target: str) -> Dict[str, Any]:
+    def get_status(self, target: str = "") -> Dict[str, Any]:
         if hasattr(self._tools, "get_status"):
             return self._normalize(self._tools.get_status(target))
         return {
@@ -432,7 +451,7 @@ class MCPToolsAdapter:
             "status": "failure",
             "message": (
                 f"get_status for '{target}' is not implemented yet in "
-                "mcp_server/tools.py — ask Vedant to add it."
+                "mcp_server/tools.py."
             ),
         }
 
@@ -597,33 +616,43 @@ class ValidationMonitorAdapter:
 # ---------------------------------------------------------------------------
 # 3. INTENT PARSER — LLM-backed with a regex fallback that always works
 # ---------------------------------------------------------------------------
-LLM_SYSTEM_PROMPT = """You are an intent-extraction engine for a network \
-automation assistant. Given a single natural-language instruction, output \
-ONLY a JSON object (no prose, no markdown fences) with this exact shape:
+LLM_SYSTEM_PROMPT = """You are an intelligent assistant for a network automation system called INA.
+You handle BOTH conversational requests and network-management requests.
+Given the user's natural-language input, output ONLY a JSON object (no prose, no markdown, no code fences) with this exact shape:
 
 {
-  "action": "block_client" | "unblock_client" | "limit_bandwidth" | "get_status" | "unknown",
-  "target": "<hostname or client identifier, snake_case, e.g. client1 or management_server>",
-  "params": { "rate_mbps": <number, only for limit_bandwidth, omit otherwise> }
+  "action": "block_client" | "unblock_client" | "limit_bandwidth" | "get_status" | "conversation" | "unknown",
+  "target": "<hostname or client identifier, snake_case, e.g. client1 or empty string>",
+  "params": {
+    "rate_mbps": <number, only for limit_bandwidth, omit otherwise>
+  },
+  "reply": "<natural conversational reply or clarification; required for conversation and unknown, optional for network actions>"
 }
 
-Rules:
-- If the instruction doesn't clearly map to one of the four actions, use "unknown".
-- Always normalize the target to lowercase snake_case (e.g. "Management Server" -> "management_server").
-- For limit_bandwidth, extract the numeric Mbps value into params.rate_mbps.
-- Output valid JSON and nothing else.
+Classification Rules:
+1. "conversation":
+   - Greetings (e.g. "hello", "hi", "hey"): friendly greeting in "reply".
+   - Gratitude/Praise (e.g. "thanks", "thank you", "great work", "good job"): warm, helpful acknowledgment in "reply".
+   - Capabilities (e.g. "what can you do?", "who are you?", "help me"): explain available capabilities (blocking/unblocking clients, limiting bandwidth, viewing live network status, and running help) in "reply".
+   - Farewells (e.g. "bye", "goodbye", "see you"): friendly goodbye in "reply".
+   - For conversational requests, set "target": "" and write the natural response in "reply".
 
-The person will very often NOT use the technical words "block" / "unblock" / "limit".
-They'll describe what they want in plain, everyday language. Map it to the closest
-action using its intent, not its wording. For example:
-- "cut client1 off the network" / "kick client1 off wifi" / "kill client1's internet"
-  -> block_client, target "client1"
-- "let client2 back on" / "restore client2's internet" / "client2 can connect again"
-  -> unblock_client, target "client2"
-- "slow client1 down to 5mbps" / "cap client1's speed at 5 megabits" / "throttle client1 to 5"
-  -> limit_bandwidth, target "client1", params.rate_mbps 5
-- "is client3 online" / "check on client3" / "what's client3 doing"
-  -> get_status, target "client3"
+2. Network management actions:
+   - "block_client": Isolating or blocking network access for a client (e.g. "block client1", "cut client1 off", "kick client1 off wifi"). Set "target" to the client name (lowercase snake_case).
+   - "unblock_client": Restoring network access (e.g. "unblock client2", "let client2 back on", "restore client2's internet"). Set "target" to the client name.
+   - "limit_bandwidth": Throttling/bandwidth capping (e.g. "limit client1 to 5mbps", "throttle client1 to 5"). Set "target" to client name and params.rate_mbps to the numeric rate.
+   - "get_status": Checking network status or client reachability (e.g. "status", "show network", "how is client1", "is client2 online"). Set "target" to the client or empty string for all clients.
+
+3. "unknown":
+   - If the input is ambiguous or does not map clearly to any known action, set "action": "unknown" and provide a polite, natural clarification in "reply" explaining how to rephrase or what commands are supported.
+
+Few-shot Examples:
+- "hello" -> {"action": "conversation", "target": "", "params": {}, "reply": "Hello! I am your Intelligent Network Assistant. How can I help you manage your network today?"}
+- "thanks" -> {"action": "conversation", "target": "", "params": {}, "reply": "You're welcome! Let me know if you need anything else."}
+- "what can you do?" -> {"action": "conversation", "target": "", "params": {}, "reply": "I can help you monitor and manage your Docker network. I can block or unblock client access, apply bandwidth rate limits, and display live network and firewall status."}
+- "bye" -> {"action": "conversation", "target": "", "params": {}, "reply": "Goodbye! Have a great day."}
+- "block client1" -> {"action": "block_client", "target": "client1", "params": {}, "reply": ""}
+- "banana" -> {"action": "unknown", "target": "", "params": {}, "reply": "I'm not sure how to help with that. You can ask me to block or unblock clients, limit bandwidth, check network status, or type 'help' for command reference."}
 """
 
 RESPONSE_SYSTEM_PROMPT = """You are the natural-language voice of a network \
@@ -695,8 +724,8 @@ def _try_anthropic(system_prompt: str, user_text: str, max_tokens: int = 300) ->
 
 def _try_openai(system_prompt: str, user_text: str, max_tokens: int = 300) -> Optional[str]:
     """Call an OpenRouter model using the OpenAI-compatible SDK."""
-    api_key = os.environ.get("OPENROUTER_API_KEY")
-    if not api_key:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key or "your-actual-api-key" in api_key:
         return None
 
     try:
@@ -788,12 +817,15 @@ def llm_parse(text: str) -> Optional[Intent]:
     params = data.get("params") or {}
     if "rate_mbps" in params and "rate" not in params:
         params["rate"] = f"{params['rate_mbps']}mbit"
+    reply = data.get("reply")
+    if reply:
+        params["reply"] = str(reply).strip()
     return Intent(
         action=action,
         target=target,
         params=params,
         raw_text=text,
-        confidence=0.9,
+        confidence=0.95 if action == ActionType.CONVERSATION else 0.9,
         parser_used="llm",
     )
 
@@ -806,6 +838,21 @@ def synthesize_natural_response(report: Dict[str, Any]) -> str:
     Falls back to a deterministic, template-built summary if no LLM
     backend is configured (or the call fails), so the CLI always produces
     a readable final answer — never a bare technical dump."""
+    intent = report.get("intent") or {}
+    params = intent.get("params") or {}
+    action = intent.get("action")
+
+    # Conversational messages and unknown clarifications carry an explicit natural reply
+    if action == ActionType.CONVERSATION.value or report.get("halted_at") == "conversation":
+        if params.get("reply"):
+            return str(params["reply"]).strip()
+        return "Hello! How can I assist you with your network today?"
+
+    if report.get("halted_at") == "parsing":
+        if params.get("reply"):
+            return str(params["reply"]).strip()
+        return _template_response(report)
+
     payload = json.dumps(report, default=str)
     reply = _call_llm(RESPONSE_SYSTEM_PROMPT, payload, max_tokens=220)
     if reply:
@@ -816,13 +863,21 @@ def synthesize_natural_response(report: Dict[str, Any]) -> str:
 def _template_response(report: Dict[str, Any]) -> str:
     """Deterministic fallback used when no AI backend is available."""
     intent = report["intent"]
-    target = intent.get("target") or "the target you mentioned"
+    raw_target = (intent.get("target") or "").strip()
+    target = raw_target or "the target you mentioned"
     action = intent.get("action", "unknown")
 
+    if report.get("halted_at") == "conversation":
+        if intent.get("params", {}).get("reply"):
+            return intent["params"]["reply"]
+        return "Hello! How can I help you manage your network today?"
+
     if report.get("halted_at") == "parsing":
+        if intent.get("params", {}).get("reply"):
+            return intent["params"]["reply"]
         return (
-            f"I wasn't able to figure out what you wanted from \"{report['raw_text']}\". "
-            "Could you rephrase it — e.g. 'block client1' or 'limit client1 to 5 Mbps'?"
+            f"I wasn't quite sure how to handle \"{report['raw_text']}\". "
+            "You can ask me to block or unblock clients, limit bandwidth, check network status, or type 'help' for available commands."
         )
 
     policy = report.get("policy") or {}
@@ -835,9 +890,15 @@ def _template_response(report: Dict[str, Any]) -> str:
     execution = report.get("execution") or {}
     if report.get("halted_at") == "execution":
         return (
-            f"Policy approved {action.replace('_', ' ')} for {target}, but the change "
-            f"failed to apply: {execution.get('message', 'unknown error')}."
+            f"Policy approved {action.replace('_', ' ')} for {target}, but the operation "
+            f"failed: {execution.get('message', 'unknown error')}."
         )
+
+    if action in (ActionType.GET_STATUS.value, "get_status"):
+        target_desc = f"for '{raw_target}'" if raw_target and raw_target not in ("all", "network", "*") else "for the managed network"
+        if execution.get("success"):
+            return f"Status {target_desc}: {execution.get('message', 'operational')}"
+        return f"Unable to retrieve status {target_desc}: {execution.get('message', 'unknown error')}."
 
     validation = report.get("validation") or {}
     if validation:
@@ -852,6 +913,22 @@ def _template_response(report: Dict[str, Any]) -> str:
 
 
 # --- Regex fallback: deterministic, dependency-free, always available -----
+_GREETING_RE = re.compile(
+    r"^(?:hi|hello|hey|greetings|good\s+(?:morning|afternoon|evening))\b",
+    re.IGNORECASE,
+)
+_THANKS_RE = re.compile(
+    r"\b(?:thanks|thank\s+you|great\s+work|good\s+job|awesome|nice\s+work)\b",
+    re.IGNORECASE,
+)
+_CAPABILITIES_RE = re.compile(
+    r"\b(?:what\s+can\s+you\s+do|who\s+are\s+you|capabilities|what\s+do\s+you\s+do|how\s+can\s+you\s+help)\b",
+    re.IGNORECASE,
+)
+_GOODBYE_RE = re.compile(
+    r"^(?:bye|goodbye|cya|see\s+you(?:\s+later)?|farewell)\b",
+    re.IGNORECASE,
+)
 _BLOCK_RE = re.compile(
     r"\b(?:block|kick|isolate)\b\s+(?P<target>[a-zA-Z0-9_\-]+)",
     re.IGNORECASE,
@@ -866,7 +943,7 @@ _LIMIT_RE = re.compile(
     re.IGNORECASE,
 )
 _STATUS_RE = re.compile(
-    r"\b(?:status|check)\b(?:\s+of)?\s+(?P<target>[a-zA-Z0-9_\-]+)",
+    r"\b(?:status|check|netstat|overview)\b(?:\s+of)?(?:\s+(?P<target>[a-zA-Z0-9_\-]+))?",
     re.IGNORECASE,
 )
 
@@ -878,6 +955,48 @@ def regex_parse(text: str) -> Intent:
     the assistant is always usable, even fully offline.
     """
     text = text.strip()
+
+    if _GREETING_RE.search(text):
+        return Intent(
+            action=ActionType.CONVERSATION,
+            target="",
+            params={"reply": "Hello! I am your Intelligent Network Assistant. How can I help you manage your network today?"},
+            raw_text=text,
+            confidence=0.9,
+            parser_used="regex",
+        )
+
+    if _THANKS_RE.search(text):
+        return Intent(
+            action=ActionType.CONVERSATION,
+            target="",
+            params={"reply": "You're welcome! Let me know if you need any other network changes or status checks."},
+            raw_text=text,
+            confidence=0.9,
+            parser_used="regex",
+        )
+
+    if _CAPABILITIES_RE.search(text):
+        return Intent(
+            action=ActionType.CONVERSATION,
+            target="",
+            params={
+                "reply": "I can help you manage and inspect your network! You can ask me to block or unblock client access, apply bandwidth rate limits (e.g., 'limit client1 to 5 Mbps'), or check live network and firewall status (e.g., 'status')."
+            },
+            raw_text=text,
+            confidence=0.9,
+            parser_used="regex",
+        )
+
+    if _GOODBYE_RE.search(text):
+        return Intent(
+            action=ActionType.CONVERSATION,
+            target="",
+            params={"reply": "Goodbye! Feel free to reach out whenever you need network assistance."},
+            raw_text=text,
+            confidence=0.9,
+            parser_used="regex",
+        )
 
     m = _LIMIT_RE.search(text)
     if m:
@@ -916,18 +1035,24 @@ def regex_parse(text: str) -> Intent:
 
     m = _STATUS_RE.search(text)
     if m:
-        target = _normalize_target(m.group("target"))
+        target_raw = m.group("target") or ""
+        target = _normalize_target(target_raw)
+        if target in ("network", "all", "net", "docker", "hosts", "clients", "system"):
+            target = ""
         return Intent(
             action=ActionType.GET_STATUS,
             target=target,
             raw_text=text,
-            confidence=0.7,
+            confidence=0.85 if target == "" else 0.75,
             parser_used="regex",
         )
 
     return Intent(
         action=ActionType.UNKNOWN,
         target="",
+        params={
+            "reply": "I'm not quite sure how to help with that. You can ask me to block or unblock clients, limit bandwidth, check network status, or type 'help' to see what's available."
+        },
         raw_text=text,
         confidence=0.0,
         parser_used="regex",
@@ -944,7 +1069,13 @@ class IntentParser:
             return intent
         # Either no LLM was configured, it failed, or it returned "unknown" —
         # give the regex parser a chance before giving up.
-        return regex_parse(text)
+        regex_intent = regex_parse(text)
+        if regex_intent.action != ActionType.UNKNOWN:
+            return regex_intent
+        # If both are unknown, preserve the LLM's clarification reply if available
+        if intent is not None and intent.params.get("reply"):
+            return intent
+        return regex_intent
 
 
 # ---------------------------------------------------------------------------
@@ -1110,12 +1241,18 @@ class NetworkAssistant:
             "halted_at": None,
         }
 
+        if intent.action == ActionType.CONVERSATION:
+            report["halted_at"] = "conversation"
+            report["elapsed_sec"] = round(time.time() - started, 3)
+            report["natural_response"] = synthesize_natural_response(report)
+            return report
+
         if intent.action == ActionType.UNKNOWN:
             report["halted_at"] = "parsing"
-            report["error"] = (
+            report["error"] = intent.params.get("reply") or (
                 "Could not understand the command. Try phrasing like "
                 "'Block client1', 'Unblock client2', 'Limit client1 to 5 Mbps', "
-                "or 'Get status of client1'."
+                "or 'status'."
             )
             report["elapsed_sec"] = round(time.time() - started, 3)
             report["natural_response"] = synthesize_natural_response(report)
@@ -1151,6 +1288,12 @@ class NetworkAssistant:
             )
 
         if not execution.success:
+            _audit(
+                intent.action,
+                {"client": intent.target, **intent.params},
+                "FAILED",
+                execution.message,
+            )
             report["halted_at"] = "execution"
             report["elapsed_sec"] = round(time.time() - started, 3)
             report["natural_response"] = synthesize_natural_response(report)
@@ -1172,43 +1315,114 @@ class NetworkAssistant:
 # 5. TERMINAL REPORTING
 # ---------------------------------------------------------------------------
 def _detect_ai_backend() -> str:
-    """Report which LLM backend (if any) is configured, so the operator
-    knows whether they're getting real AI-parsed intents + AI-written
-    replies, or the deterministic regex/template fallback."""
+    """Report whether an LLM backend or the deterministic regex fallback is active."""
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    is_openrouter_set = bool(openrouter_key and "your-actual-api-key" not in openrouter_key)
+
     if os.environ.get("LITELLM_MODEL"):
-        return f"real (litellm:{os.environ['LITELLM_MODEL']})"
+        return "REAL (LITELLM)"
     if os.environ.get("ANTHROPIC_API_KEY"):
-        return f"real (anthropic:{os.environ.get('ANTHROPIC_MODEL', 'claude-sonnet-4-5')})"
-    if os.environ.get("OPENROUTER_API_KEY"):
-        return f"real (openrouter:{os.environ.get('OPENROUTER_MODEL', 'google/gemini-2.0-flash-001')})"
-    return "mock (regex parser + template replies — set ANTHROPIC_API_KEY / OPENROUTER_API_KEY / LITELLM_MODEL)"
+        return "REAL (ANTHROPIC)"
+    if is_openrouter_set:
+        return "REAL (OPENROUTER)"
+    return "FALLBACK (REGEX)"
 
 
 def print_startup_banner() -> None:
-    mcp_note = "  [mcp SDK detected]" if MCP_SDK_AVAILABLE else ""
-    if INTEGRATION_STATUS["mcp_tools"].startswith("real") and not hasattr(
-        _real_mcp_tools_module, "get_status"
-    ):
-        mcp_note += "  [get_status pending from Vedant]"
+    mcp_note = "  [MCP SDK DETECTED]" if MCP_SDK_AVAILABLE else ""
     lines = [
-        f"AI Agent (parsing + reply):  {_detect_ai_backend().upper()}",
-        f"Policy Engine (Khushi):      {INTEGRATION_STATUS['policy_engine'].upper()}",
-        f"MCP Tools (Vedant):          {INTEGRATION_STATUS['mcp_tools'].upper()}{mcp_note}",
-        f"Validation Monitor (Dhruv):  {INTEGRATION_STATUS['validation_monitor'].upper()}",
-        f"Audit Log (Khushi):          {INTEGRATION_STATUS['audit_log'].upper()}",
+        f"AI Agent:            {_detect_ai_backend().upper()}",
+        f"Policy Engine:       {INTEGRATION_STATUS['policy_engine'].upper()}",
+        f"MCP Tools:           {INTEGRATION_STATUS['mcp_tools'].upper()}{mcp_note}",
+        f"Validation Monitor:  {INTEGRATION_STATUS['validation_monitor'].upper()}",
+        f"Audit Logging:       {INTEGRATION_STATUS['audit_log'].upper()}",
     ]
     body = "\n".join(lines)
     if RICH_AVAILABLE:
         console.print(
             Panel.fit(
                 body,
-                title="[bold cyan]Intelligent Network Assistant — Startup[/bold cyan]",
+                title="[bold cyan]Intelligent Network Assistant — Subsystem Status[/bold cyan]",
                 border_style="cyan",
             )
         )
     else:
-        console.print("=== Intelligent Network Assistant — Startup ===")
+        console.print("=== Intelligent Network Assistant — Subsystem Status ===")
         console.print(body)
+
+
+def print_help() -> None:
+    """Display concise help showing available user commands."""
+    if RICH_AVAILABLE:
+        table = Table(title="Available Commands", box=box.SIMPLE_HEAVY, show_header=True, header_style="bold magenta")
+        table.add_column("Command", style="bold cyan")
+        table.add_column("Description")
+        table.add_column("Example", style="dim")
+        table.add_row("block <client>", "Block client network access at firewall", "block client1")
+        table.add_row("unblock <client>", "Restore client network access", "unblock client1")
+        table.add_row("limit <client> <rate>", "Set bandwidth rate limit on client", "limit client1 5mbit")
+        table.add_row("status", "Show live Docker network, client, firewall, and bandwidth status", "status")
+        table.add_row("help", "Display available commands and usage reference", "help")
+        console.print(table)
+        console.print()
+    else:
+        print("\n=== Available Commands ===")
+        print("  block <client>        Block client network access at firewall (e.g. block client1)")
+        print("  unblock <client>      Restore client network access (e.g. unblock client1)")
+        print("  limit <client> <rate> Set bandwidth rate limit on client (e.g. limit client1 5mbit)")
+        print("  status                Show live Docker network, client, firewall, and bandwidth status (e.g. status)")
+        print("  help                  Display available commands and usage reference\n")
+
+
+def print_status_table(details: Dict[str, Any]) -> None:
+    """Render a concise, human-readable status table for network and client states."""
+    network = details.get("network", {})
+    clients = details.get("clients", {})
+
+    net_name = network.get("name", "network_project-net")
+    subnet = network.get("subnet", "N/A")
+    gateway = network.get("gateway", "N/A")
+    net_status = "Available" if network.get("available", True) else "Unavailable"
+    net_title = f"Network: {net_name} ({subnet}, Gateway: {gateway}) — {net_status}"
+
+    if RICH_AVAILABLE:
+        table = Table(title=net_title, box=box.SIMPLE_HEAVY, show_header=True, header_style="bold magenta")
+        table.add_column("Target", style="bold")
+        table.add_column("IP Address", style="cyan")
+        table.add_column("State")
+        table.add_column("Reachability")
+        table.add_column("Firewall")
+        table.add_column("Bandwidth Limit")
+
+        for name, data in sorted(clients.items()):
+            state = data.get("status", "unknown")
+            reachable = data.get("reachable", False)
+            reach_str = "[green]Reachable[/green]" if reachable else "[red]Unreachable[/red]"
+
+            fw = data.get("firewall", "unknown")
+            if fw == "blocked":
+                fw_str = "[bold red]Blocked[/bold red]"
+            elif fw == "protected":
+                fw_str = "[bold cyan]Protected[/bold cyan]"
+            else:
+                fw_str = "[green]Unblocked[/green]"
+
+            bw = data.get("bandwidth_limit", "none")
+            bw_str = f"[yellow]{bw}[/yellow]" if bw != "none" else "[dim]None[/dim]"
+
+            table.add_row(name, data.get("ip", "N/A"), state, reach_str, fw_str, bw_str)
+
+        console.print(table)
+        console.print()
+    else:
+        print(f"\n=== {net_title} ===")
+        header = f"{'Target':<14} {'IP Address':<16} {'State':<10} {'Reachability':<14} {'Firewall':<12} {'Bandwidth Limit':<15}"
+        print(header)
+        print("-" * len(header))
+        for name, data in sorted(clients.items()):
+            reach = "Reachable" if data.get("reachable") else "Unreachable"
+            print(f"{name:<14} {data.get('ip', 'N/A'):<16} {data.get('status', 'unknown'):<10} {reach:<14} {data.get('firewall', 'unknown'):<12} {data.get('bandwidth_limit', 'none'):<15}")
+        print()
 
 
 def print_report(report: Dict[str, Any]) -> None:
@@ -1216,18 +1430,24 @@ def print_report(report: Dict[str, Any]) -> None:
     terminal summary."""
     intent = report["intent"]
 
-    # Did the request fully succeed? Used to color the AI-agent reply panel.
-    overall_ok = (
-        report.get("halted_at") is None
-        and (report.get("validation") or {}).get("success", True)
-    )
+    halted_at = report.get("halted_at")
+
+    if halted_at == "conversation":
+        reply_color = "cyan"
+    elif halted_at == "parsing":
+        reply_color = "yellow"
+    else:
+        overall_ok = (
+            halted_at is None
+            and (report.get("validation") or {}).get("success", True)
+        )
+        reply_color = "green" if overall_ok else "red"
 
     if RICH_AVAILABLE:
         console.rule(f"[bold]Request {report['request_id']}[/bold]")
         console.print(f"[dim]You said:[/dim] \"{report['raw_text']}\"")
 
         # --- The AI agent's natural-language reply, shown first --------
-        reply_color = "green" if overall_ok else ("red" if report.get("halted_at") else "yellow")
         console.print(
             Panel.fit(
                 report.get("natural_response", "(no response generated)"),
@@ -1235,6 +1455,15 @@ def print_report(report: Dict[str, Any]) -> None:
                 border_style=reply_color,
             )
         )
+
+        # Conversational and unknown queries do not run the network pipeline
+        if halted_at == "conversation":
+            console.print(f"[dim]Completed in {report.get('elapsed_sec', 0.0)}s[/dim]\n")
+            return
+
+        if halted_at == "parsing":
+            console.print(f"[dim]Tip: Type 'help' to see available network commands. ({report.get('elapsed_sec', 0.0)}s)[/dim]\n")
+            return
 
         # --- Technical trace of the pipeline, for debugging/demo -------
         table = Table(box=box.SIMPLE_HEAVY, show_header=True, header_style="bold magenta")
@@ -1247,65 +1476,68 @@ def print_report(report: Dict[str, Any]) -> None:
             f"params={intent['params']} (via {intent['parser_used']}, conf={intent['confidence']})",
         )
 
-        if report.get("error"):
-            table.add_row("[red]Error[/red]", report["error"])
-            console.print(table)
-            console.print()
-            return
-
-        policy = report["policy"]
-        policy_color = "green" if policy["allowed"] else "red"
+        policy = report.get("policy") or {}
+        policy_color = "green" if policy.get("allowed") else "red"
         table.add_row(
-            "Policy Check (Khushi)",
-            f"[{policy_color}]{'ALLOW' if policy['allowed'] else 'DENY'}[/{policy_color}] — {policy['reason']}",
+            "Policy Engine",
+            f"[{policy_color}]{'ALLOW' if policy.get('allowed') else 'DENY'}[/{policy_color}] — {policy.get('reason', '')}",
         )
 
-        if not policy["allowed"]:
+        if not policy.get("allowed"):
             console.print(table)
             console.print()
             return
 
-        execution = report["execution"]
-        exec_color = "green" if execution["success"] else "red"
+        execution = report.get("execution") or {}
+        exec_color = "green" if execution.get("success") else "red"
         table.add_row(
-            "Execution (Vedant / MCP)",
-            f"[{exec_color}]{'OK' if execution['success'] else 'FAILED'}[/{exec_color}] — {execution['message']}",
+            "MCP Tools",
+            f"[{exec_color}]{'OK' if execution.get('success') else 'FAILED'}[/{exec_color}] — {execution.get('message', '')}",
         )
 
-        if not execution["success"]:
+        if not execution.get("success"):
             console.print(table)
             console.print()
             return
 
-        validation = report["validation"]
-        val_color = "green" if validation["success"] else "yellow"
+        validation = report.get("validation") or {}
+        val_color = "green" if validation.get("success") else "yellow"
         table.add_row(
-            "Validation (Dhruv)",
-            f"[{val_color}]{'CONFIRMED' if validation['success'] else 'UNCONFIRMED'}[/{val_color}] — {validation['summary']}",
+            "Validation Monitor",
+            f"[{val_color}]{'CONFIRMED' if validation.get('success') else 'UNCONFIRMED'}[/{val_color}] — {validation.get('summary', '')}",
         )
 
         console.print(table)
         console.print(f"[dim]Completed in {report['elapsed_sec']}s[/dim]\n")
+
+        # If this was a status query and was successful, render the status table
+        if intent["action"] in (ActionType.GET_STATUS.value, "get_status") and execution.get("details", {}).get("clients"):
+            print_status_table(execution["details"])
     else:
         # Plain-text fallback for environments without rich installed.
         print(f"\n--- Request {report['request_id']} ---")
         print(f'You said: "{report["raw_text"]}"')
         print(f"INA: {report.get('natural_response', '(no response generated)')}")
+        if halted_at == "conversation":
+            print(f"Completed in {report.get('elapsed_sec', 0.0)}s\n")
+            return
+        if halted_at == "parsing":
+            print(f"Tip: Type 'help' to see available network commands. ({report.get('elapsed_sec', 0.0)}s)\n")
+            return
         print(f"[trace] Intent: {intent}")
-        if report.get("error"):
-            print(f"[trace] ERROR: {report['error']}")
+        policy = report.get("policy") or {}
+        print(f"[trace] Policy Engine: {'ALLOW' if policy.get('allowed') else 'DENY'} - {policy.get('reason')}")
+        if not policy.get("allowed"):
             return
-        policy = report["policy"]
-        print(f"[trace] Policy: {'ALLOW' if policy['allowed'] else 'DENY'} - {policy['reason']}")
-        if not policy["allowed"]:
+        execution = report.get("execution") or {}
+        print(f"[trace] MCP Tools: {'OK' if execution.get('success') else 'FAILED'} - {execution.get('message')}")
+        if not execution.get("success"):
             return
-        execution = report["execution"]
-        print(f"[trace] Execution: {'OK' if execution['success'] else 'FAILED'} - {execution['message']}")
-        if not execution["success"]:
-            return
-        validation = report["validation"]
-        print(f"[trace] Validation: {'CONFIRMED' if validation['success'] else 'UNCONFIRMED'} - {validation['summary']}")
+        validation = report.get("validation") or {}
+        print(f"[trace] Validation Monitor: {'CONFIRMED' if validation.get('success') else 'UNCONFIRMED'} - {validation.get('summary')}")
         print(f"Completed in {report['elapsed_sec']}s")
+        if intent["action"] in (ActionType.GET_STATUS.value, "get_status") and execution.get("details", {}).get("clients"):
+            print_status_table(execution["details"])
 
 
 # ---------------------------------------------------------------------------
@@ -1318,9 +1550,9 @@ async def run_single_command(assistant: NetworkAssistant, text: str) -> None:
 
 async def run_interactive(assistant: NetworkAssistant) -> None:
     console.print(
-        "[bold green]Interactive mode.[/bold green] Type a command, or 'exit' / 'quit' to leave.\n"
+        "[bold green]Interactive mode.[/bold green] Type a command, 'help' for command list, or 'exit' / 'quit' to leave.\n"
         if RICH_AVAILABLE
-        else "Interactive mode. Type a command, or 'exit' / 'quit' to leave.\n"
+        else "Interactive mode. Type a command, 'help' for command list, or 'exit' / 'quit' to leave.\n"
     )
     while True:
         try:
@@ -1336,6 +1568,9 @@ async def run_interactive(assistant: NetworkAssistant) -> None:
             break
         if not stripped:
             continue
+        if stripped in ("help", "?"):
+            print_help()
+            continue
         report = await assistant.process_command(text)
         print_report(report)
 
@@ -1348,7 +1583,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="*",
-        help='Optional single command to run non-interactively, e.g. "Block client1". '
+        help='Optional single command to run non-interactively, e.g. "Block client1", "status", "help". '
         "If omitted, starts an interactive session.",
     )
     return parser
@@ -1360,6 +1595,9 @@ async def _amain() -> None:
     print_startup_banner()
 
     if args.command:
+        if len(args.command) == 1 and args.command[0].strip().lower() in ("help", "?"):
+            print_help()
+            return
         text = " ".join(args.command)
         await run_single_command(assistant, text)
     else:
@@ -1376,3 +1614,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+

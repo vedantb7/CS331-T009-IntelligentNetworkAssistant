@@ -1,438 +1,270 @@
-# Intelligent Network Assistant (INA) - Network Documentation
-
-Welcome to the comprehensive documentation for the **Intelligent Network Assistant (INA)** network environment. This document describes the network architecture, container services, setup and management procedures, baseline test verification measurements, and troubleshooting guides.
+# Docker & Linux Network Implementation
 
 ---
 
-## 📂 Project Structure
+## 1. Purpose of the Docker Network in INA
 
-Below is an overview of the key files and directories in this repository:
+The **Intelligent Network Configuration Assistant (INA)** uses a virtualized Docker network to provide an isolated, deterministic, and safe local area network (LAN) environment. 
+
+### Why a Containerized Network?
+- **Realistic Linux Networking Primitives**: Containers run in distinct Linux network namespaces (`netns`), allowing real Linux kernel packet filtering (`nftables`) and traffic shaping (`tc`/IFB) to be applied and measured without modifying the host machine's physical network adapters.
+- **Safety & Isolation**: Automated network policy changes (such as blocking clients or throttling bandwidth) are confined to the virtual Docker bridge, preventing accidental network disruption on the operator's machine.
+- **Deterministic Testbed**: Provides reproducible IP addressing, hostnames, and connectivity baselines for automated integration testing and validation.
+
+---
+
+## 2. Network Topology & Architecture
+
+The network consists of a custom Docker bridge network hosting managed client and server nodes, alongside a privileged network controller running with host networking to enforce bridge-level packet filtering.
 
 ```text
-ina/
-├── docs/                             # Project documentation
-│   ├── network.md                    # Main combined network architecture, setup, and baseline verification guide
-│   ├── README.md                     # Documentation entry point
-│   └── network-baseline.md           # Baseline verification & test results
-├── network/                          # Network environment & services
-│   ├── Dockerfile                    # Container definition with networking utilities
-│   ├── docker-compose.yml            # Multi-container service definitions
-│   ├── setup.sh                      # Shell script to automate checks, setup & tests
-│   └── client.py                     # Custom TCP client/server socket script
-└── README.md                         # Project landing page
++--------------------------------------------------------------------------------+
+|                             Host Network Namespace                             |
+|                                                                                |
+|  +--------------------------------------------------------------------------+  |
+|  |                 network-controller (network_mode: host)                  |  |
+|  |  * Role: Enforcement proxy for L2 bridge firewalling                     |  |
+|  |  * Privileged container (privileged: true)                               |  |
+|  |  * Volumes: /var/run/docker.sock, /lib/modules:ro                        |  |
+|  |  * Controls nftables bridge table 'network_filter'                       |  |
+|  +--------------------------------------------------------------------------+  |
+|                                       |                                        |
+|                                       | Enforces bridge drop rules             |
+|                                       v                                        |
+|  +--------------------------------------------------------------------------+  |
+|  |            Docker Bridge Network: project-net (172.20.0.0/24)            |  |
+|  |            Bridge Gateway: 172.20.0.1 (Interface on host)                |  |
+|  |                                                                          |  |
+|  |  +--------------------+  +--------------------+  +--------------------+  |  |
+|  |  |      client1       |  |      client2       |  |       server       |  |  |
+|  |  |    172.20.0.2      |  |    172.20.0.4      |  |    172.20.0.3      |  |  |
+|  |  |   CAP_NET_ADMIN    |  |   CAP_NET_ADMIN    |  |   CAP_NET_ADMIN    |  |  |
+|  |  |  (Managed Client)  |  |  (Validation Peer) |  | (Protected Server) |  |  |
+|  |  |  tc eth0 + ifb0    |  |  ping / iperf3 src |  | HTTP :5000         |  |  |
+|  |  |                    |  |                    |  | iperf3 :5201       |  |  |
+|  |  +--------------------+  +--------------------+  +--------------------+  |  |
+|  |            ^                      ^                        ^             |  |
+|  |            |                      |                        |             |  |
+|  |            +----------------------+------------------------+             |  |
+|  |                   Inter-Container Bridged L2 Forwarding                  |  |
+|  +--------------------------------------------------------------------------+  |
++--------------------------------------------------------------------------------+
 ```
 
----
-
-## 🗺️ Network Topology & Architecture
-
-The project establishes a containerized local area network (LAN) inside a bridge network, alongside a privileged controller operating on the host network stack.
-
-```mermaid
-graph TD
-    subgraph Host Network Mode
-        NC[network-controller]
-    end
-
-    subgraph Custom Bridge Network: project-net (172.20.0.0/24)
-        GW[Gateway: 172.20.0.1]
-        C1[client1: 172.20.0.2]
-        SRV[server: 172.20.0.3]
-        C2[client2: 172.20.0.4]
-        
-        GW --- C1
-        GW --- SRV
-        GW --- C2
-        
-        C1 <--> SRV
-        C2 <--> SRV
-        C1 <--> C2
-    end
-```
-
-### 🎛️ Network Configuration
-
-The network configuration details are defined in `network/docker-compose.yml`:
-
-* **Network Name**: `network_project-net` (resolved automatically by Docker Compose)
-* **Driver**: `bridge`
-* **Subnet**: `172.20.0.0/24`
-* **Gateway**: `172.20.0.1`
+### Subnet & Addressing Configuration
+Defined in [`network/docker-compose.yml`](file:///mnt/DISK/Studies/SEM%205/CS%20331/Project/ina/network/docker-compose.yml):
+* **Network Name**: `project-net` (Docker Compose creates this as `network_project-net`).
+* **Driver**: `bridge` (Linux virtual bridge).
+* **IPv4 Subnet**: `172.20.0.0/24` (254 assignable addresses).
+* **Default Gateway**: `172.20.0.1` (Assigned to the host-side virtual bridge interface).
 
 ---
 
-## 📦 Container Services & Assignments
+## 3. Container Services & Node Roles
 
-| Container | Hostname | IP Address | Network Mode | Privileged | Default Command / Process | Role |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| **`client1`** | `client1` | `172.20.0.2` | `project-net` | No | `sleep infinity` | Network Client Node |
-| **`server`** | `server` | `172.20.0.3` | `project-net` | No | `python3 -m http.server 5000` | HTTP/TCP Server Daemon |
-| **`client2`** | `client2` | `172.20.0.4` | `project-net` | No | `sleep infinity` | Network Client Node |
-| **`network-controller`** | `network-controller` | *Host IP* | `host` | Yes | `sleep infinity` | Controller & Policy Enforcer |
+> **Important**: The containers on `project-net` are **managed targets and workloads**, not administrators. They do not configure policies or control each other. The MCP Server on the host orchestrates configuration changes on these targets via the Docker Engine API.
 
-### 🛠️ Container Capabilities & Utilities
-
-All containers are built from the local `Dockerfile` (based on `python:3.12-slim`) and include the following network administration utilities pre-installed:
-* **`iproute2`**: Providing the `ip` tool suite (e.g. `ip addr`, `ip route`, `ip link`).
-* **`iputils-ping`**: Providing the `ping` utility for connectivity checks.
-* **`net-tools`**: Providing traditional tools like `ifconfig` and `route`.
+| Container Name | Assigned Static IP | Network Mode | Privileges & Capabilities | Primary Workload / Daemon | Role in INA Architecture |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **`client1`** | `172.20.0.2` | `project-net` | `cap_add: NET_ADMIN` | `sleep infinity` | **Managed Client Node**: Primary target for firewall blocking, unblocking, and bi-directional bandwidth throttling tests. |
+| **`client2`** | `172.20.0.4` | `project-net` | `cap_add: NET_ADMIN` | `sleep infinity` | **Secondary Client Node**: Acts as the unblocked peer/source container for validation pings and cross-bridge connectivity tests. |
+| **`server`** | `172.20.0.3` | `project-net` | `cap_add: NET_ADMIN` | `iperf3 -s -D && python3 -m http.server 5000` | **Protected Service Node**: Designated as an immutable asset in `policy/rules.yaml`. Runs an HTTP service (port 5000) and an `iperf3` daemon (port 5201) for bandwidth benchmarks. |
+| **`network-controller`**| *Host IP* | `host` | `privileged: true` | `sleep infinity` | **Enforcement Controller**: Execution proxy running with host netfilter privileges. Mounts `/var/run/docker.sock` and host kernel modules to apply `nftables` bridge filtering. |
 
 ---
 
-## 🔌 Interface & Routing Details
+## 4. Key Files in `network/`
 
-### Client Node Interfaces
-Inside the client containers (e.g. `client1` or `client2`), the standard network interfaces configured are:
-1. **`lo` (Loopback)**: `127.0.0.1/8` - for local loopback communications.
-2. **`eth0` (Ethernet)**: Connected to the `project-net` bridge network with the assigned static IP (`172.20.0.2` or `172.20.0.4`).
+### 4.1 `network/docker-compose.yml`
+Declarative multi-container configuration defining:
+- The custom bridge network `project-net` and subnet `172.20.0.0/24`.
+- Static IP address assignments for `client1`, `client2`, and `server`.
+- Linux capabilities (`cap_add: NET_ADMIN`) for traffic control.
+- Host-mode networking and `/var/run/docker.sock` volume mounting for `network-controller`.
 
-### Routing Table (Client)
-By default, the routing table within each client container is configured as follows:
-* **Default route**: Traffic destined outside the local subnet goes through the gateway `172.20.0.1` on device `eth0`.
-* **Local Subnet Route**: Traffic for `172.20.0.0/24` is routed directly through device `eth0` with source IP set to the container's static IP.
+### 4.2 `network/Dockerfile`
+Base container image definition derived from `python:3.12-slim`. Pre-installs essential Linux networking and inspection utilities:
+- `iproute2`: Provides `ip` and `tc` (Traffic Control).
+- `iputils-ping`: Provides `ping` for ICMP diagnostics.
+- `iperf3`: Network throughput benchmark utility.
+- `net-tools`: Traditional tools (`ifconfig`, `netstat`).
+- `nftables` & `iptables`: Packet filtering utilities.
+- `kmod`: Linux kernel module loading tools.
+- `procps` & `docker.io`: Process monitoring and Docker CLI client.
 
-Example `ip route` output from `client1`:
-```text
-default via 172.20.0.1 dev eth0 
-172.20.0.0/24 dev eth0 proto kernel scope link src 172.20.0.2 
-```
+### 4.3 `network/setup.sh`
+An automated bash bootstrap and verification script that performs:
+1. Docker daemon availability checks.
+2. Clean teardown of existing project containers and networks.
+3. Building and launching the containers via `docker compose up -d --build`.
+4. Verification that all 4 containers are running.
+5. Automated TCP port checks (`client1`/`client2` -> `server:5000`).
+6. DNS resolution verification (`client1` -> `client2`).
+7. ICMP ping checks to establish baseline reachability.
 
----
-
-## 🛡️ Special Service: Network Controller
-
-The `network-controller` service is uniquely configured:
-* **`network_mode: host`**: Bypasses Docker's network namespaces, attaching the container directly to the host's network interfaces.
-* **`privileged: true`**: Grants root-level access to kernel subsystems. This enables the controller to:
-  * Manipulate routing tables on the host machine.
-  * Control network interfaces, create virtual bridges, or manipulate namespaces.
-  * Utilize packet-filtering utilities (`iptables` / `nftables`) and traffic shaping (`tc`) to simulate latency, packet loss, or firewall rules between containers.
-
----
-
-## 📋 Prerequisites
-
-Before setting up the environment, ensure your host machine meets the following requirements:
-
-* **Operating System**: Linux (recommended due to direct bridge interface mapping and `host` network controller requirements).
-* **Docker**: Engine version `20.10.0` or higher.
-* **Docker Compose**: V2 installed (accessible via `docker compose`).
-* **Python**: Python 3.x (optional on the host, but useful for running scripts locally; pre-installed inside the containers).
+### 4.4 `network/discovery.py`
+Dynamic runtime discovery module utilizing the Docker SDK for Python (`docker.from_env()`):
+- Replaces static IP assumptions in application code with dynamic lookups.
+- `get_container_ip(container_name)`: Queries Docker API for a container's current IPv4 address on `project-net`.
+- `list_known_clients()`: Discovers all currently running containers on the project bridge and returns a `{name: ip}` mapping.
+- Validates container names and IPv4 syntax to prevent injection vulnerabilities.
 
 ---
 
-## 🚀 Installation & Setup
+## 5. Client Discovery: Static vs. Dynamic
 
-### ⚡ Quick Start / Automated Setup
-To quickly get the environment running and perform automated connectivity verification, execute:
+The INA network uses a hybrid architecture combining static container assignment with dynamic runtime discovery:
 
-1. Navigate to the network directory:
-   ```bash
-   cd network
-   ```
-
-2. Make the setup script executable (if not already):
-   ```bash
-   chmod +x setup.sh
-   ```
-
-3. Run the setup script:
-   ```bash
-   ./setup.sh
-   ```
-
-#### What `setup.sh` Does:
-1. **Environment Verifications**: Validates Docker installations and checks if the Docker daemon is active.
-2. **Teardown & Clean**: Cleans up previous container runs, leftover project networks, and orphans.
-3. **Build & Deploy**: Triggers the Docker Compose build process (`docker compose up -d --build`).
-4. **Health Check**: Monitors container status to ensure all 4 containers are running.
-5. **Connectivity Tests**: Runs a suite of connectivity checks:
-   * **TCP Port Check**: client1 -> server (`server:5000`)
-   * **TCP Port Check**: client2 -> server (`server:5000`)
-   * **DNS Resolution**: Checks if client1 can resolve the hostname `client2` via the internal Docker DNS.
-   * **ICMP Ping**: client1 -> server
-   * **ICMP Ping**: client2 -> server
-
-### 🛠️ Manual Environment Management
-
-If you prefer to control the environment manually instead of using `setup.sh`, use the following commands:
-
-1. **Build and Start Environment** (from `network/` directory):
-   ```bash
-   docker compose up -d --build
-   ```
-
-2. **View Active Containers**:
-   ```bash
-   docker compose ps
-   ```
-
-3. **Access Container Shell**:
-   ```bash
-   # Enter client1
-   docker exec -it client1 bash
-
-   # Enter client2
-   docker exec -it client2 bash
-
-   # Enter the network-controller
-   docker exec -it network-controller bash
-   ```
-
-4. **Stop and Clean Environment**:
-   ```bash
-   # Stop containers without deleting
-   docker compose stop
-
-   # Stop, delete containers, and clean networks
-   docker compose down
-   ```
+1. **Static Compose Configuration**:
+   - Containers are assigned fixed IPs in `docker-compose.yml` (`client1`: `172.20.0.2`, `server`: `172.20.0.3`, `client2`: `172.20.0.4`).
+   - This ensures predictable IP assignments across rebuilds and aligns with policy whitelists.
+2. **Dynamic Application Discovery**:
+   - The application layer (Assistant, Policy Engine, MCP Server, and Validation Monitor) **does not hardcode IP strings**.
+   - Whenever an operation is requested for `"client1"`, `network.discovery.get_container_ip("client1")` queries the Docker daemon at runtime.
+   - If containers are reassigned, restarted, or dynamically added, the system automatically resolves the correct IP without code changes.
 
 ---
 
-## 📡 Testing & Network Baseline Verification
+## 6. Network Capabilities & Permissions
 
-This section documents manual testing execution and the verified network baseline measurements for the Intelligent Network Assistant (INA) environment.
+Containers are granted specific Linux capabilities to adhere to the principle of least privilege while enabling low-level network operations:
 
-### 🧪 Manual Connectivity Testing
+### 1. `cap_add: NET_ADMIN` (on `client1`, `client2`, `server`)
+- **Why Required**: Linux Traffic Control (`tc`) and interface creation (`ip link add type ifb`) require the `CAP_NET_ADMIN` capability inside the container's network namespace.
+- **Scope**: Confined to each container's private network namespace (`netns`). A container with `CAP_NET_ADMIN` cannot modify the host's interfaces or sibling containers.
 
-You can manually execute the following validation commands to verify your setup:
+### 2. `privileged: true` & `network_mode: host` (on `network-controller`)
+- **Why Required**: Filtering packets on a software bridge requires interaction with the host Linux kernel's bridge netfilter hooks (`nftables` bridge family).
+- **Scope**: Allows `network-controller` to execute `nft add element bridge ...` commands that intercept Layer-2 forwarded frames passing between containers across `network_project-net`.
 
-#### ICMP Ping Verification
-Run a ping test from `client1` to `server`:
+### 3. Volume Mounts on `network-controller`
+- `/var/run/docker.sock`: Allows container management and inspection via Docker API.
+- `/lib/modules:/lib/modules:ro`: Grants access to host kernel modules (e.g. `br_netfilter`, `ifb`) if on-demand module loading is required.
+
+---
+
+## 7. How INA & MCP Interact with the Network
+
+The MCP Server (`mcp_server/tools.py`) executes network modifications via containerized subprocess calls:
+
+### 7.1 Client Blocking & Unblocking (`nftables`)
+Executed via `docker exec network-controller nft ...`:
+1. **Rule Initialization**: The MCP server initializes a bridge-level table, forward chain, and IP set:
+   ```bash
+   docker exec network-controller nft add table bridge network_filter
+   docker exec network-controller nft add chain bridge network_filter forward '{ type filter hook forward priority 0; policy accept; }'
+   docker exec network-controller nft add set bridge network_filter blocked_clients '{ type ipv4_addr; }'
+   docker exec network-controller nft add rule bridge network_filter forward ip saddr @blocked_clients drop
+   docker exec network-controller nft add rule bridge network_filter forward ip daddr @blocked_clients drop
+   ```
+2. **Block**: Resolves client IP via `discovery.py` and adds the IP to `@blocked_clients`:
+   ```bash
+   docker exec network-controller nft add element bridge network_filter blocked_clients '{ 172.20.0.2 }'
+   ```
+3. **Unblock**: Removes the IP from `@blocked_clients` and clears any `tc` rules:
+   ```bash
+   docker exec network-controller nft delete element bridge network_filter blocked_clients '{ 172.20.0.2 }'
+   ```
+
+### 7.2 Bandwidth Limiting (`tc` + `ifb`)
+Executed via `docker exec <client> ...`:
+1. **Ingress Shaping**: Because Linux `tc` normally shapes only egress traffic, an Intermediate Functional Block (`ifb0`) device is created inside the client container:
+   ```bash
+   docker exec client1 ip link add name ifb0 type ifb
+   docker exec client1 ip link set dev ifb0 up
+   docker exec client1 tc qdisc add dev eth0 handle ffff: ingress
+   docker exec client1 tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
+   docker exec client1 tc qdisc replace dev ifb0 root tbf rate 10mbit burst 32kbit latency 400ms
+   ```
+2. **Egress Shaping**: Direct Token Bucket Filter (TBF) applied to `eth0`:
+   ```bash
+   docker exec client1 tc qdisc replace dev eth0 root tbf rate 10mbit burst 32kbit latency 400ms
+   ```
+3. **Rollback**: If any command fails, `_cleanup_tc_qdiscs(client)` tears down `ifb0` and resets `eth0` qdiscs.
+
+### 7.3 Status & Discovery
+1. Resolves all active containers on `project-net` using Docker Engine SDK.
+2. Queries the live `nftables` bridge set (`nft list set bridge network_filter blocked_clients`) to identify blocked IPs.
+3. Queries `tc qdisc show dev eth0` inside each container to report active bandwidth limits.
+4. Pings containers from `server` to check Layer-3 reachability.
+
+---
+
+## 8. Network Operations & Troubleshooting Commands
+
+### 8.1 Starting and Stopping the Network
 ```bash
-docker exec -it client1 ping -c 4 server
+# Automated startup, build, and health check:
+./network/setup.sh
+
+# Manual startup via Docker Compose:
+docker compose -f network/docker-compose.yml up -d --build
+
+# View running container status:
+docker compose -f network/docker-compose.yml ps
+
+# Stop and remove containers and bridge network:
+docker compose -f network/docker-compose.yml down
 ```
 
-#### TCP Socket Communication Test (Custom Client/Server)
-Inside the containers, a custom Python TCP script (`client.py`) is copied to `/app/client.py`. You can use it to test custom message exchange:
+### 8.2 Inspecting Network State
+```bash
+# Inspect Docker bridge subnet, gateway, and connected containers:
+docker network inspect network_project-net
 
-1. **Start TCP server listener inside `client1`**:
-   ```bash
-   docker exec -it client1 python3 client.py server
-   ```
-   *(Starts listener on `0.0.0.0:5000`)*
+# Inspect container IP configuration:
+docker exec client1 ip addr show dev eth0
 
-2. **Trigger TCP client inside `client2` in a separate terminal**:
-   ```bash
-   docker exec -it client2 python3 client.py client
-   ```
-   *(Connects to `client1:5000`, sends handshake, prints server response, and repeats every 5 seconds)*
+# Inspect routing table inside client:
+docker exec client1 ip route show
+```
 
-3. **Verify Output**:
-   * **Client output**: `connecting to client1:5000`, `recieved : Hello from server`
-   * **Server output**: `waiting for connection...`, `recieved message: hello form client2`
+### 8.3 Inspecting Active Kernel Policies
+```bash
+# List active nftables bridge filter rules and blocked clients set:
+docker exec network-controller nft list ruleset
+
+# Inspect active traffic control queuing disciplines on client1:
+docker exec client1 tc qdisc show dev eth0
+docker exec client1 tc qdisc show dev ifb0
+```
+
+### 8.4 Troubleshooting Common Issues
+
+| Issue | Root Cause | Solution |
+| :--- | :--- | :--- |
+| **Docker daemon not running** | Docker service is stopped. | Run `sudo systemctl start docker`. |
+| **`check_block` reports client reachable** | Ping was issued from host OS instead of a peer container. Host pings bypass L2 bridge forwarding hooks. | Use `validation.monitor` or ping from sibling container: `docker exec client2 ping 172.20.0.2`. |
+| **`check_bandwidth` fails / timeout** | `iperf3` server daemon exited on `server`. | Restart listener: `docker exec -d server iperf3 -s`. |
+| **Permission denied on Docker commands** | Current user lacks Docker socket permissions. | Add user to `docker` group: `sudo usermod -aG docker $USER`. |
+| **Subnet address conflict** | `172.20.0.0/24` is used by another local bridge. | Remove conflicting networks with `docker network prune` or adjust subnet in `docker-compose.yml`. |
 
 ---
 
-### 🛡️ Manual Policy Control Testing (`block`, `unblock`, `limit_bandwidth`)
+## 9. Baseline Network Verification Procedures
 
-You can test network policies manually from the host terminal using `docker exec` commands targeting `iptables` on `network-controller` and `tc` on client containers.
+Before applying policy modifications, the network environment must satisfy the following baseline measurements:
 
-#### 0. Enable Host Bridge Netfilter (Prerequisite)
-To allow host `iptables` rules on `network-controller` to filter Layer 2 container bridge traffic:
-* **Terminal Command**:
-  ```bash
-  docker exec network-controller modprobe br_netfilter
-  ```
-* **Intended Result**: Loads the `br_netfilter` kernel module enabling `iptables` to process bridged Docker traffic.
-
----
-
-#### 1. Testing `block` Manually (Firewall Rule)
-Block all outbound traffic originating from `client1` (`172.20.0.2`):
-
-* **Terminal Commands**:
-  ```bash
-  # Apply DROP rule on network-controller for client1 IP
-  docker exec network-controller iptables -I DOCKER-USER -s 172.20.0.2 -j DROP
-
-  # Inspect rule in DOCKER-USER chain
-  docker exec network-controller iptables -L DOCKER-USER -n -v --line-numbers
-
-  # Test connectivity from blocked container
-  docker exec client1 ping -c 4 -W 1 172.20.0.4
-  ```
-
-* **Intended Result**:
-  * The `DOCKER-USER` chain displays line 1: `DROP all -- 172.20.0.2 everywhere`.
-  * `ping` from `client1` to `client2` or `server` fails with **100% packet loss**.
-  * The packet/byte counter for rule 1 in `iptables -L DOCKER-USER -n -v` increases with each dropped packet attempt.
-
----
-
-#### 2. Testing `unblock` Manually (Firewall Rule Removal)
-Remove the DROP rule to restore full network communication for `client1`:
-
-* **Terminal Commands**:
-  ```bash
-  # Delete DROP rule (rule #1) from DOCKER-USER chain
-  docker exec network-controller iptables -D DOCKER-USER 1
-
-  # Verify chain is empty / rule removed
-  docker exec network-controller iptables -L DOCKER-USER -n -v --line-numbers
-
-  # Verify connectivity from client1
-  docker exec client1 ping -c 4 172.20.0.4
-  ```
-
-* **Intended Result**:
-  * The `DROP` rule is deleted from the `DOCKER-USER` chain.
-  * `ping` from `client1` to `client2` or `server` succeeds with **0% packet loss**.
-  * Complete network connectivity is restored.
-
----
-
-#### 3. Testing `limit_bandwidth` Manually (`tc` Traffic Control)
-Apply a Token Bucket Filter (`tbf`) queuing discipline on interface `eth0` of `client1` to throttle outbound bandwidth to **5 Mbps**:
-
-* **Terminal Commands**:
-  ```bash
-  # Start iperf3 server daemon on server node (if not already active)
-  docker exec -d server iperf3 -s
-
-  # Test baseline throughput prior to restriction
-  docker exec client1 iperf3 -c 172.20.0.3 -t 5
-
-  # Apply bi-directional 5 Mbps bandwidth limit on client1 (eth0 Egress + IFB Ingress)
-  docker exec client1 tc qdisc replace dev eth0 root tbf rate 5mbit burst 32kbit latency 400ms
-  docker exec client1 ip link add dev ifb0 type ifb
-  docker exec client1 ip link set dev ifb0 up
-  docker exec client1 tc qdisc add dev eth0 handle ffff: ingress
-  docker exec client1 tc filter add dev eth0 parent ffff: protocol ip u32 match u32 0 0 action mirred egress redirect dev ifb0
-  docker exec client1 tc qdisc replace dev ifb0 root tbf rate 5mbit burst 32kbit latency 400ms
-
-  # Verify active tc queuing discipline configuration
-  docker exec client1 tc qdisc show dev eth0
-  docker exec client1 tc qdisc show dev ifb0
-
-  # Measure throttled egress bandwidth (client1 -> server)
-  docker exec client1 iperf3 -c 172.20.0.3 -t 5
-
-  # Measure throttled ingress bandwidth (server -> client1 via reverse mode)
-  docker exec client1 iperf3 -c 172.20.0.3 -t 5 -R
-
-  # Remove bandwidth limitation (reset queuing disciplines and delete IFB device)
-  docker exec client1 tc qdisc del dev eth0 root 2>/dev/null
-  docker exec client1 tc qdisc del dev eth0 ingress 2>/dev/null
-  docker exec client1 tc qdisc del dev ifb0 root 2>/dev/null
-  docker exec client1 ip link delete dev ifb0 2>/dev/null
-  ```
-
-* **Intended Result**:
-  * **Baseline**: Unthrottled bandwidth achieves high speed (>10 Gbps).
-  * **qdisc Configuration**: `tc qdisc show` on both `eth0` and `ifb0` reports `qdisc tbf ... rate 5Mbit burst 4Kb lat 400ms`.
-  * **Throttled Benchmark**: Both egress and ingress `iperf3` transfer rates drop from >10 Gbps down to **~4.5 – 5.5 Mbps**.
-  * **Removal**: Cleaning up qdiscs and `ifb0` restores throughput back to full unthrottled baseline speed (>10 Gbps).
-
----
-
-### 📊 Baseline Network Verification & Diagnostic Outputs
-
-#### Connectivity Matrix & Verification
-
-##### 1. `client1` ➔ `server` (ICMP & TCP)
-* **Status**: `PASS`
-* **Packet Loss**: `0%`
-* **Average RTT**: `0.044 ms`
-
-**Ping Command Execution Output:**
-```text
-PING server (172.20.0.3) 56(84) bytes of data.
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=1 ttl=64 time=0.031 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=2 ttl=64 time=0.053 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=3 ttl=64 time=0.039 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=4 ttl=64 time=0.053 ms
-
---- server ping statistics ---
-4 packets transmitted, 4 received, 0% packet loss, time 3082ms
-rtt min/avg/max/mdev = 0.031/0.044/0.053/0.009 ms
+### 1. ICMP Ping Baseline (Zero Loss)
+```bash
+# Test reachability between clients and server
+docker exec client1 ping -c 3 172.20.0.3
+docker exec client2 ping -c 3 172.20.0.3
+docker exec client1 ping -c 3 172.20.0.4
 ```
+* **Expected Result**: 0% packet loss, round-trip time (RTT) < 0.1 ms across the local bridge.
 
-##### 2. `client2` ➔ `server` (ICMP & TCP)
-* **Status**: `PASS`
-* **Packet Loss**: `0%`
-* **Average RTT**: `0.055 ms`
-
-**Ping Command Execution Output:**
-```text
-PING server (172.20.0.3) 56(84) bytes of data.
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=1 ttl=64 time=0.030 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=2 ttl=64 time=0.092 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=3 ttl=64 time=0.048 ms
-64 bytes from server.network_project-net (172.20.0.3): icmp_seq=4 ttl=64 time=0.052 ms
-
---- server ping statistics ---
-4 packets transmitted, 4 received, 0% packet loss, time 3096ms
-rtt min/avg/max/mdev = 0.030/0.055/0.092/0.022 ms
+### 2. TCP Service Reachability
+```bash
+# Verify HTTP server availability
+docker exec client1 python3 -c "import socket; socket.create_connection(('server', 5000), 5)"
 ```
+* **Expected Result**: Immediate socket connection without timeout or rejection.
 
-#### Diagnostic Outputs: Interfaces & Routing Table
-
-##### Client 1 (`client1`) Interfaces (`ip addr`)
-```text
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-    inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host proto kernel_lo 
-       valid_lft forever preferred_lft forever
-2: eth0@if75: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
-    link/ether ae:3b:f5:9e:6c:ac brd ff:ff:ff:ff:ff:ff link-netnsid 0
-    inet 172.20.0.2/24 brd 172.20.0.255 scope global eth0
-       valid_lft forever preferred_lft forever
+### 3. Unthrottled Bandwidth Benchmark
+```bash
+# Measure raw inter-container throughput before applying tc limits
+docker exec client1 iperf3 -c 172.20.0.3 -t 5
 ```
-
-##### Client 2 (`client2`) Interfaces (`ip addr`)
-```text
-1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000
-    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
-    inet 127.0.0.1/8 scope host lo
-       valid_lft forever preferred_lft forever
-    inet6 ::1/128 scope host proto kernel_lo 
-       valid_lft forever preferred_lft forever
-2: eth0@if74: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
-    link/ether 2a:64:78:2f:15:11 brd ff:ff:ff:ff:ff:ff link-netnsid 0
-    inet 172.20.0.4/24 brd 172.20.0.255 scope global eth0
-       valid_lft forever preferred_lft forever
-```
-
-##### Routing Table (`ip route`)
-Verified routing configuration on client nodes:
-```text
-default via 172.20.0.1 dev eth0 
-172.20.0.0/24 dev eth0 proto kernel scope link src 172.20.0.2 
-```
-
-#### Baseline Summary Status
-* **Status**: `PASS`
-* **Security & Traffic Control Note**: No firewall policies, traffic shaping, or packet dropping configured. This baseline serves as the raw network speed/routing benchmark.
-
----
-
-## 🔍 Troubleshooting
-
-Here are common issues and how to resolve them:
-
-### 1. Error: `Docker daemon is not running`
-* **Cause**: Docker service is not active on the host machine.
-* **Solution**: Start the service via systemd:
-  ```bash
-  sudo systemctl start docker
-  ```
-
-### 2. Error: `network-controller` fails to start
-* **Cause**: The container runs in `host` mode with `privileged: true`. If the docker daemon doesn't have sufficient privileges or if security modules like SELinux/AppArmor are blocking it, it might fail.
-* **Solution**: Check the container logs:
-  ```bash
-  docker logs network-controller
-  ```
-  Ensure your user is part of the `docker` group, or run compose with `sudo`.
-
-### 3. Port Conflicts (Address already in use)
-* **Cause**: Another service on the host is already using port `5000`.
-* **Solution**: Change the mapped host ports in `docker-compose.yml` or stop the conflicting service on the host:
-  ```bash
-  sudo lsof -i :5000
-  # Kill the conflicting PID if necessary
-  ```
+* **Expected Result**: Throughput between 10 Gbps and 30+ Gbps (typical for in-memory Linux virtual bridge communication).
+* **Validation Contrast**: Once throttled to `10mbit`, the same `iperf3` command will measure **~9.2 – 10.5 Mbps**.

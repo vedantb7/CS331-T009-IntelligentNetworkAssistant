@@ -50,6 +50,7 @@ def explain_action(index: int = -1):
         "ALLOWED": "allowed",
         "DENIED": "denied",
         "APPLIED": "applied",
+        "FAILED": "failed to apply",
     }.get(entry["status"], entry["status"].lower())
 
     return f"I {verb} the request to {entry['action']} with params {entry['params']} because: {entry['reason']}"

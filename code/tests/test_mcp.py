@@ -202,3 +202,68 @@ def test_limit_propagates_network_failure():
 
         assert result["status"] == "failure"
         assert result["message"] == "tc command failed."
+
+
+# ============================================================
+# status()
+# ============================================================
+
+def test_status_calls_get_status():
+    expected_response = {
+        "status": "success",
+        "action": "get_status",
+        "client": "client1",
+        "message": "Client client1 is reachable."
+    }
+
+    with patch("mcp_server.server.get_status", return_value=expected_response) as mock_status:
+        result = server.status("client1")
+
+        mock_status.assert_called_once_with("client1")
+        assert result == expected_response
+
+
+def test_status_defaults_to_empty_when_omitted():
+    expected_response = {
+        "status": "success",
+        "action": "get_status",
+        "client": "all",
+        "message": "Network status active."
+    }
+
+    with patch("mcp_server.server.get_status", return_value=expected_response) as mock_status:
+        result = server.status()
+
+        mock_status.assert_called_once_with("")
+        assert result == expected_response
+
+
+def test_status_returns_failure_response():
+    failure_response = {
+        "status": "failure",
+        "action": "get_status",
+        "client": "invalid_client",
+        "message": "Client 'invalid_client' not found in Docker network."
+    }
+
+    with patch("mcp_server.server.get_status", return_value=failure_response) as mock_status:
+        result = server.status("invalid_client")
+
+        mock_status.assert_called_once_with("invalid_client")
+        assert result == failure_response
+        assert result["status"] == "failure"
+
+
+def test_status_propagates_network_failure():
+    failure_response = {
+        "status": "failure",
+        "action": "get_status",
+        "client": "all",
+        "message": "Docker command not found."
+    }
+
+    with patch("mcp_server.server.get_status", return_value=failure_response):
+        result = server.status()
+
+        assert result["status"] == "failure"
+        assert result["message"] == "Docker command not found."

@@ -85,3 +85,122 @@
 {"timestamp": "2026-09-10T00:58:12", "action": "limit_bandwidth", "params": {"client": "client1", "rate_mbps": 9, "rate": "9mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 9mbit successfully."}
 {"timestamp": "2026-09-10T00:59:19", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
 {"timestamp": "2026-09-10T00:59:19", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T03:26:51", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-10T03:26:51", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T03:27:59", "action": "limit_bandwidth", "params": {"client": "client2", "rate": "6mbit", "rate_mbps": 6.0}, "status": "ALLOWED", "reason": "6.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T03:27:59", "action": "limit_bandwidth", "params": {"client": "client2", "rate": "6mbit", "rate_mbps": 6.0}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 6mbit successfully."}
+{"timestamp": "2026-09-10T03:55:54", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:55:54", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T03:56:20", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:56:20", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T03:56:25", "action": "get_status", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Status query permitted for 'client1'."}
+{"timestamp": "2026-09-10T03:56:26", "action": "get_status", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client 'client1' (172.20.0.2) is reachable. Firewall: unblocked. Bandwidth limit: none. Network: network_project-net."}
+{"timestamp": "2026-09-10T03:56:30", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-10T03:56:31", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T03:56:58", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:57:01", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): unreachable. Hosts: 1/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T03:57:42", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:57:44", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 1/3 reachable. Blocked: client1. Rate limited: client2 (6Mbit)."}
+{"timestamp": "2026-09-10T03:57:58", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:57:59", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 2/3 reachable. Blocked: client1. Rate limited: client2 (6Mbit)."}
+{"timestamp": "2026-09-10T03:58:05", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T03:58:05", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T03:58:19", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:58:19", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T03:59:38", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit", "rate_mbps": 5.0}, "status": "ALLOWED", "reason": "5.0mbit is within allowed range. Limit permitted."}
+{"timestamp": "2026-09-10T03:59:39", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit", "rate_mbps": 5.0}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T03:59:51", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T03:59:51", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Rate limited: client1 (5Mbit)."}
+{"timestamp": "2026-09-10T03:59:52", "action": "unblock_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Unblock permitted for 'client1'."}
+{"timestamp": "2026-09-10T03:59:53", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T04:00:07", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T04:00:07", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T04:01:39", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T04:01:40", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 3/3 reachable. Firewall: all unblocked. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T04:01:55", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "'client1' is not protected. Block permitted."}
+{"timestamp": "2026-09-10T04:01:55", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T04:02:09", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T04:02:10", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 2/3 reachable. Blocked: client1. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T04:10:58", "action": "get_status", "params": {"client": ""}, "status": "ALLOWED", "reason": "Network status query permitted."}
+{"timestamp": "2026-09-10T04:11:00", "action": "get_status", "params": {"client": ""}, "status": "APPLIED", "reason": "Network 'network_project-net' (172.20.0.0/24, Gateway: 172.20.0.1) active. Server 'server' (172.20.0.3): reachable. Hosts: 2/3 reachable. Blocked: client1. Bandwidth limits: none."}
+{"timestamp": "2026-09-10T04:20:18", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client and cannot be blocked."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already blocked."}
+{"timestamp": "2026-09-10T04:24:06", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T04:24:06", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T04:24:06", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T04:24:06", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "10mbit"}, "status": "FAILED", "reason": "RTNETLINK answers: Device or resource busy"}
+{"timestamp": "2026-09-10T04:24:06", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "none"}, "status": "APPLIED", "reason": "Bandwidth limit removed for client1 successfully."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Operation timed out while communicating with network-controller."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Docker command not found. Please ensure Docker is running and available in PATH."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Client 'client1' not found in Docker environment."}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "Protected infrastructure"}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Block permitted"}
+{"timestamp": "2026-09-10T04:24:06", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked."}
+{"timestamp": "2026-09-10T04:24:09", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client"}
+{"timestamp": "2026-09-10T04:24:09", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "ALLOWED", "reason": "Permitted"}
+{"timestamp": "2026-09-10T04:24:09", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "FAILED", "reason": "tc command failed"}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already blocked."}
+{"timestamp": "2026-09-10T04:24:58", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T04:24:58", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T04:24:58", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T04:24:58", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "10mbit"}, "status": "FAILED", "reason": "RTNETLINK answers: Device or resource busy"}
+{"timestamp": "2026-09-10T04:24:58", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "none"}, "status": "APPLIED", "reason": "Bandwidth limit removed for client1 successfully."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Operation timed out while communicating with network-controller."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Docker command not found. Please ensure Docker is running and available in PATH."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Client 'client1' not found in Docker environment."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "Protected infrastructure"}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Block permitted"}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked."}
+{"timestamp": "2026-09-10T04:24:58", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client"}
+{"timestamp": "2026-09-10T04:24:58", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "ALLOWED", "reason": "Permitted"}
+{"timestamp": "2026-09-10T04:24:58", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "FAILED", "reason": "tc command failed"}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already blocked."}
+{"timestamp": "2026-09-10T04:25:01", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T04:25:01", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T04:25:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T04:25:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "10mbit"}, "status": "FAILED", "reason": "RTNETLINK answers: Device or resource busy"}
+{"timestamp": "2026-09-10T04:25:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "none"}, "status": "APPLIED", "reason": "Bandwidth limit removed for client1 successfully."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Operation timed out while communicating with network-controller."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Docker command not found. Please ensure Docker is running and available in PATH."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Client 'client1' not found in Docker environment."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "Protected infrastructure"}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Block permitted"}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked."}
+{"timestamp": "2026-09-10T04:25:01", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client"}
+{"timestamp": "2026-09-10T04:25:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "ALLOWED", "reason": "Permitted"}
+{"timestamp": "2026-09-10T04:25:01", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "FAILED", "reason": "tc command failed"}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already blocked."}
+{"timestamp": "2026-09-10T04:44:24", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T04:44:24", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T04:44:24", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T04:44:24", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "10mbit"}, "status": "FAILED", "reason": "RTNETLINK answers: Device or resource busy"}
+{"timestamp": "2026-09-10T04:44:24", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "none"}, "status": "APPLIED", "reason": "Bandwidth limit removed for client1 successfully."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Operation timed out while communicating with network-controller."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Docker command not found. Please ensure Docker is running and available in PATH."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Client 'client1' not found in Docker environment."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "Protected infrastructure"}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Block permitted"}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked."}
+{"timestamp": "2026-09-10T04:44:24", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client"}
+{"timestamp": "2026-09-10T04:44:24", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "ALLOWED", "reason": "Permitted"}
+{"timestamp": "2026-09-10T04:44:24", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "FAILED", "reason": "tc command failed"}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked successfully at bridge level."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already blocked."}
+{"timestamp": "2026-09-10T05:18:28", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 unblocked successfully."}
+{"timestamp": "2026-09-10T05:18:28", "action": "unblock_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 is already unblocked."}
+{"timestamp": "2026-09-10T05:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "APPLIED", "reason": "Bi-directional (ingress & egress) bandwidth limited to 5mbit successfully."}
+{"timestamp": "2026-09-10T05:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "10mbit"}, "status": "FAILED", "reason": "RTNETLINK answers: Device or resource busy"}
+{"timestamp": "2026-09-10T05:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "none"}, "status": "APPLIED", "reason": "Bandwidth limit removed for client1 successfully."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Operation timed out while communicating with network-controller."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Docker command not found. Please ensure Docker is running and available in PATH."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "FAILED", "reason": "Client 'client1' not found in Docker environment."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "Protected infrastructure"}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "ALLOWED", "reason": "Block permitted"}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "client1"}, "status": "APPLIED", "reason": "Client client1 blocked."}
+{"timestamp": "2026-09-10T05:18:28", "action": "block_client", "params": {"client": "server"}, "status": "DENIED", "reason": "'server' is a protected client"}
+{"timestamp": "2026-09-10T05:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "ALLOWED", "reason": "Permitted"}
+{"timestamp": "2026-09-10T05:18:28", "action": "limit_bandwidth", "params": {"client": "client1", "rate": "5mbit"}, "status": "FAILED", "reason": "tc command failed"}
