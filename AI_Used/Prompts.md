@@ -285,3 +285,105 @@ This document displays the prompts used by the project team during the design, i
 >
 > Keep a clear record of the changes made during the debugging process, including the problem,
 > root cause, fix, and verification performed.
+
+---
+
+#### By Khushi
+
+## Prompt 1 - Understanding the Project and My Component
+
+> I am part of a four-person team building the Intelligent Network Configuration Assistant (INA)
+> project. Before I start working on my part, help me understand the project as a whole in plain,
+> simple language: what problem it solves, what the overall pipeline looks like from a user typing
+> a command to the network actually changing, and what each of the four components (assistant, MCP
+> server, policy/rules, validation) is responsible for.
+>
+> My specific ownership is the Policy and Rules component: a rulebook that defines what actions are
+> allowed on the network, a policy engine that checks every requested action against that rulebook
+> before it reaches the network tools, and an audit log that records every decision made.
+>
+> Explain this to me from scratch, assuming I don't already know networking or MCP concepts in
+> depth. Use plain language and concrete examples rather than jumping straight into architecture
+> diagrams or code. Once I understand the full picture, help me understand exactly what my
+> component needs to produce and how it fits between the assistant layer and the MCP server layer.
+
+## Prompt 2 — Designing the Rulebook and Policy Engine
+
+> Based on my team's agreed architecture and the real Docker network setup (clients named client1,
+> client2, and a protected server container, each with fixed IP addresses), help me design and
+> implement the Policy and Rules component.
+>
+> I need:
+> - A YAML rulebook defining protected clients, an allowed bandwidth range, and the set of actions
+>   the system is permitted to perform at all.
+> - A policy engine exposing a single function that takes an action name and a parameters
+>   dictionary, checks it against the rulebook, and returns a clear ALLOW/DENY decision along with
+>   a human-readable reason.
+>
+> The function needs to reject requests for actions outside the allowed list, requests targeting
+> unrecognized or protected clients, and bandwidth requests outside the configured minimum/maximum
+> range. Keep the implementation simple, in plain Python with light comments explaining what each
+> part does, since I want to be able to explain this code to my team and in my report.
+>
+> After implementing it, test it standalone with a range of realistic inputs - allowed requests,
+> denied requests for protected clients, and invalid/unknown clients or actions - so I can confirm
+> the logic is correct before anyone else's code depends on it.
+
+## Prompt 3 — Building the Audit Log
+
+> Extend my Policy and Rules component with an audit logging module. Every decision made by the
+> policy engine (allowed or denied) should be recorded with a timestamp, the action requested, the
+> parameters involved, the resulting status, and the reason behind the decision.
+>
+> The log should be appendable (new entries added without rewriting the whole file), readable back
+> as a full history, and able to produce a plain-English explanation of the most recent decision -
+> since my team wants the assistant to eventually be able to answer "why did you do that?" using
+> this log as the source of truth.
+>
+> Keep this module simple and dependency-light, using only what's necessary to read/write structured
+> log entries. Test it standalone to confirm entries are written and read back correctly, and that
+> the plain-English explanation function produces a sensible sentence from a logged entry.
+
+## Prompt 4 - Integrating with the Real MCP Contract
+
+> My teammate Vedant has shared the actual JSON contract his MCP tools use for block_client,
+> unblock_client, and limit_bandwidth, along with the real Docker network configuration (container
+> names, IP addresses, and how his tools execute network commands). Review this against my existing
+> policy engine and rulebook, and identify any mismatches - for example, client names that don't
+> match the real network, or assumptions about the response format that don't match his actual
+> tools.
+>
+> Update my rulebook and policy engine so they are consistent with the real system rather than
+> placeholder values. Also help me understand exactly where in the pipeline my policy check needs
+> to be called - i.e., before which operations in the MCP server - so that no network change can
+> happen without first passing through my policy engine.
+>
+> Clearly explain what changed and why, so I can communicate the update accurately to my team rather
+> than just accepting a change without understanding its reasoning.
+
+## Prompt 5 - Writing Test Cases
+
+> Write a test suite for my policy engine covering both the expected/normal cases and the important
+> edge cases: a protected client being denied, an unknown/unrecognized client being denied, bandwidth
+> requests above and below the allowed range being denied, a disallowed action being denied outright,
+> and the corresponding cases where a request should be correctly allowed.
+>
+> Keep the tests deterministic and independent of any external system (Docker, network state, or
+> other teammates' code), since this component should be fully verifiable on its own. Run the full
+> test suite and confirm every case passes, and explain clearly what each test is actually verifying
+> so I can describe this testing approach in my project report.
+
+## Prompt 6 - Documenting My Component
+
+> Write clear documentation for my Policy and Rules component, structured similarly to the
+> documentation style my teammate used for the MCP server component, so our project documentation
+> stays consistent across the team.
+>
+> The documentation should explain what the component is responsible for, the files it consists of,
+> how the rulebook is structured, how other teammates are expected to call my policy engine, how the
+> logging works, how to run the tests, and where exactly this component sits in the overall request
+> pipeline - from the user's command down to the real network change and back.
+>
+> Keep the explanation accurate to what is actually implemented, avoid describing anything as
+> working that hasn't been verified, and write it so that a teammate or an evaluator unfamiliar with
+> my part of the code could understand and verify it without needing to ask me directly.
