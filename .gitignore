@@ -5,4 +5,5 @@ __pycache__/
 .pytest_cache
 *.log
 policy/audit_log.jsonl
-.pytest_cache
+code/policy/audit_log.jsonl
+*.jsonl
