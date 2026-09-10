@@ -307,7 +307,7 @@ This document displays the prompts used by the project team during the design, i
 > diagrams or code. Once I understand the full picture, help me understand exactly what my
 > component needs to produce and how it fits between the assistant layer and the MCP server layer.
 
-## Prompt 2 — Designing the Rulebook and Policy Engine
+## Prompt 2 - Designing the Rulebook and Policy Engine
 
 > Based on my team's agreed architecture and the real Docker network setup (clients named client1,
 > client2, and a protected server container, each with fixed IP addresses), help me design and
@@ -329,7 +329,7 @@ This document displays the prompts used by the project team during the design, i
 > denied requests for protected clients, and invalid/unknown clients or actions - so I can confirm
 > the logic is correct before anyone else's code depends on it.
 
-## Prompt 3 — Building the Audit Log
+## Prompt 3 - Building the Audit Log
 
 > Extend my Policy and Rules component with an audit logging module. Every decision made by the
 > policy engine (allowed or denied) should be recorded with a timestamp, the action requested, the
