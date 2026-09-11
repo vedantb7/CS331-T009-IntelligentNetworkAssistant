@@ -956,16 +956,11 @@ A record of every prompt given, in order, verbatim.
 
 ## Prompt 10 — Technical Documentation & QA Matrix Reports
 
-> Update the project documentation (`/docs`) and technical reports (`/reports`) to reflect the finalized implementation and empirical verification results.
+> Update the project documentation (`/docs`) to reflect the finalized implementation and empirical verification results.
 >
 > 1. **Documentation Updates (`/docs`):**
 >    - `docs/network.md` — Document bridge topology `172.20.0.0/24`, container capabilities, and dynamic discovery (`discovery.py`).
 >    - `docs/validation.md` — Document active monitoring architecture, sibling ping routing, `iperf3` tolerance math, and daemon re-spawning.
 >    - `docs/testing.md` — Document PyTest suite organization, execution commands, and test coverage breakdown.
->
-> 2. **Technical Reports (`/reports`):**
->    - `04_network_validation_and_monitoring.md` — Detailed analysis of active verification methods.
->    - `08_docker_infrastructure_and_cni.md` — Detailed analysis of bridge architecture and capability isolation.
->    - `09_testing_suite_and_qa_matrix.md` — Complete 128-test QA matrix detailing pass rates and execution benchmarks.
->    - `10_debugging_root_cause_analysis_and_breakthroughs.md` — Detailed root cause analysis for the key technical breakthroughs (host ping bypass, ingress shaping, qdisc cleanup leaks, dynamic discovery, stale sockets).
+
 
