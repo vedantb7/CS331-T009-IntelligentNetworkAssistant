@@ -838,6 +838,261 @@ A record of every prompt given, in order, verbatim.
 
 ---
 
+---
+
+## Prompt 14 
+
+# 6-Slide Academic Project Presentation Prompt
+
+Create a professional 6-slide academic project presentation for:
+
+**“Intelligent Network Configuration Assistant using MCP and Rule-Based Automation”**
+
+**Team ID:** T009  
+**Project ID:** 5
+
+## Team
+
+- Dhruv Meshram — 24110109
+- Ananya Patel — 24110038
+- Khushi Garg — 24110164
+- Vedant Bondekar — 24110384
+
+The presentation should be **technically credible, concise, and focused primarily on the NETWORKING perspective**, with AI/MCP presented as the enabling layer. Do not exaggerate the use of AI or claim capabilities that are not implemented.
+
+---
+
+## SLIDE 1 — TEAM & PROJECT INTRODUCTION
+
+Include:
+
+- Project title
+- Team ID and Project ID
+- Four team members with roll numbers
+- 1–2 line problem statement/introduction
+- Briefly establish the goal:
+  - Provide a controlled assistant for network configuration and management
+  - Use MCP as the interface for network-related tools
+  - Use rule-based automation and policy enforcement to control operations
+
+Keep this slide simple and introductory.
+
+---
+
+## SLIDE 2 — PROBLEM STATEMENT & OUR UNDERSTANDING
+
+Explain the networking problem we identified:
+
+- Network configuration and management can involve repetitive/manual operations.
+- Direct access to network operations can create security and consistency concerns.
+- Multiple clients need controlled isolation and communication.
+- An administrator needs a controlled mechanism to interact with network resources.
+- AI should assist with understanding/initiating operations, but actual operations must remain constrained by policies and system controls.
+
+Also mention the key challenges we identified:
+
+- Isolation
+- Controlled access
+- Policy enforcement
+- Auditability
+- Validation
+- Reliable interaction between components
+
+Use concise points and a simple visual representation of the problem rather than a large paragraph.
+
+---
+
+## SLIDE 3 — ARCHITECTURE
+
+Show a **clear architecture diagram** rather than a text-heavy slide.
+
+Include these components:
+
+- Administrator / Assistant
+- MCP Server
+- MCP Tools
+- Policy Engine / Rule-Based Enforcement
+- Docker-based Network
+- Multiple isolated clients
+- Audit Logging
+- Validation / Monitoring
+
+Show the direction of requests and enforcement clearly.
+
+Recommended conceptual flow:
+
+**Administrator / Assistant**  
+↓  
+**MCP Server**  
+↓  
+**MCP Tools**  
+↓  
+**Policy Engine / Rules**  
+↓  
+**Authorized Network Operation**  
+↓  
+**Docker Network / Isolated Clients**
+
+Also show:
+
+- Policy decisions → **Audit Log**
+- Network operation → **Validation / Monitoring**
+- Validation result → **Administrator / Assistant**
+
+Important architectural principle:
+
+> **MCP/AI does not bypass policy enforcement.**
+
+The MCP layer provides the controlled interface, while deterministic policy rules and network-level controls determine what operations can actually be performed.
+
+Emphasize that **network isolation and application-level policy work together**.
+
+---
+
+## SLIDE 4 — WORKFLOW / END-TO-END OPERATION
+
+Present the system workflow visually using connected boxes/arrows:
+
+**Administrator / AI-Assisted Request**  
+→ **MCP Interface**  
+→ **MCP Tool**  
+→ **Policy / Rule Evaluation**  
+→ **Allowed Operation OR Denied Operation**  
+→ **Network / Client Action**  
+→ **Audit Log**  
+→ **Validation / Monitoring**  
+→ **Result Returned to Administrator**
+
+Briefly explain that this creates a:
+
+- Controlled
+- Policy-constrained
+- Traceable
+- Validated
+
+network-management workflow.
+
+Clearly distinguish the two paths:
+
+**DENIED**
+→ Operation is stopped  
+→ Decision is logged  
+→ Refusal/result returned
+
+**ALLOWED**
+→ Network operation is executed  
+→ Result is validated  
+→ Action and outcome are returned/logged
+
+Avoid unnecessary implementation details on this slide.
+
+---
+
+## SLIDE 5 — IMPLEMENTATION & NETWORKING FEATURES
+
+Focus strongly on what was actually implemented.
+
+Include:
+
+### Network Infrastructure
+- Docker-based network environment
+- Isolated workload containers
+- Docker bridge networking
+- Runtime client/network discovery
+
+### Network Management
+- MCP server and network-related tools
+- Client isolation / blocking
+- Bandwidth limiting
+- Controlled network operations
+
+### Governance & Security
+- Rule-based Policy Engine
+- Protected targets and operation constraints
+- Input validation
+- Audit logging
+
+### Verification
+- Active network validation
+- Connectivity and traffic verification
+- Automated unit/integration testing
+- Negative and edge-case testing
+
+Briefly mention the AI role:
+
+> **AI/LLM acts as an assistant/interface for understanding network requests, while deterministic rules, validation, and system-level network controls enforce what can actually happen.**
+
+Do not present the project as an autonomous AI network manager.
+
+If space permits, include a small visual showing:
+
+**AI/Assistant → MCP → Policy → Network**
+
+with the **Policy + Network layers visually emphasized**.
+
+---
+
+## SLIDE 6 — CHALLENGES, RESULTS & FUTURE SCOPE
+
+Divide the slide into three clearly separated sections.
+
+### Challenges Faced
+
+- Translating the problem statement into a realistic architecture
+- Maintaining isolation while allowing required communication
+- Understanding and integrating MCP with actual network operations
+- Preventing policy bypass
+- Handling invalid and unauthorized operations
+- Ensuring components continue working after incremental changes
+- Debugging integration issues between application logic and Linux networking
+
+### Results
+
+- Modular architecture
+- Controlled network-management workflow
+- Policy-based enforcement
+- Auditable operations
+- Active validation and monitoring
+- Robust automated testing, including negative and edge cases
+- Reliable integration between assistant, MCP, policy, and network components
+
+Do not invent or add performance claims that are not explicitly supported by the project.
+
+### Future Scope
+
+- More sophisticated network configuration operations
+- Richer policy/rule management
+- Better AI-assisted intent understanding
+- More advanced monitoring and anomaly detection
+- Support for larger and more realistic network environments
+
+---
+
+# DESIGN REQUIREMENTS
+
+- Academic/technical presentation suitable for a **CS/Networking project evaluation**.
+- Modern, clean, professional visual style.
+- Use **diagrams, arrows, icons, and concise bullet points** instead of paragraphs.
+- Keep networking concepts visually prominent.
+- Give MCP/AI an important but **supporting role**, rather than making the project appear to be primarily an AI project.
+- Avoid generic stock imagery and unnecessary decorative elements.
+- Maintain consistent terminology across all slides.
+- Use the same component names throughout the presentation.
+- Keep each slide readable when presented in a classroom.
+- Prefer visual hierarchy and whitespace over dense text.
+- Use consistent typography, spacing, shapes, and diagram styles.
+- Highlight the distinction between:
+  - **AI/LLM → intent assistance**
+  - **MCP → controlled tool interface**
+  - **Policy Engine → deterministic governance**
+  - **Network layer → actual enforcement**
+  - **Validation → verification of resulting state**
+- Do not invent benchmarks, performance numbers, security guarantees, features, or results that are not present in the project.
+- Do not claim that the system is fully autonomous.
+- Do not imply that the LLM directly executes privileged network commands.
+- Keep the overall presentation concise and technically defensible.
+---
+
 
 #### By Dhruv
 
@@ -962,5 +1217,1212 @@ A record of every prompt given, in order, verbatim.
 >    - `docs/network.md` — Document bridge topology `172.20.0.0/24`, container capabilities, and dynamic discovery (`discovery.py`).
 >    - `docs/validation.md` — Document active monitoring architecture, sibling ping routing, `iperf3` tolerance math, and daemon re-spawning.
 >    - `docs/testing.md` — Document PyTest suite organization, execution commands, and test coverage breakdown.
+
+## Prompt 9 — Report Prompt
+
+# Task — Analyze the Entire Project and Generate the Final LaTeX Report
+
+You are working on the **Intelligent Network Configuration Assistant** project.
+
+Your task is to perform a **high-detail technical analysis of the entire project repository** and then **generate/update the project's LaTeX academic report (`report.tex`)** based on the actual implementation.
+
+The final deliverable is the **LaTeX report itself**, not Markdown documentation or separate reports.
+
+---
+
+# 1. First: Analyze the Entire Repository
+
+Before modifying `report.tex`, thoroughly inspect the complete repository.
+
+Do **not** start by simply reading the existing `report.tex` and copying its content.
+
+Analyze the actual implementation first.
+
+Inspect:
+
+* Complete directory structure
+* All Python source files
+* MCP implementation
+* Assistant/client implementation
+* Network configuration
+* Docker Compose files
+* Dockerfiles, if present
+* Network setup scripts
+* Policy files
+* Policy engine
+* Validation code
+* Monitoring code
+* Test files
+* Configuration files
+* Environment/configuration handling
+* Requirements/dependencies
+* README/documentation
+* Shell scripts
+* Comments explaining design decisions
+* Existing `report.tex`
+* `/docs` folder, if present
+* Any other project-related files
+
+Understand how all components actually interact.
+
+The **repository implementation is the primary source of truth**.
+
+---
+
+# 2. Analyze the Existing LaTeX Report
+
+After understanding the implementation, inspect the existing:
+
+```text
+report.tex
+```
+
+Determine:
+
+* Existing document structure
+* Existing sections/subsections
+* Existing technical content
+* Existing figures
+* Existing tables
+* Existing equations
+* Existing references
+* Existing formatting
+* Existing packages
+* Existing macros
+* Existing bibliography configuration
+* Existing diagram style
+* Existing code/listing style
+* Existing page layout
+
+Preserve the useful formatting and structure unless there is a strong technical/reporting reason to improve it.
+
+Do not unnecessarily redesign the document.
+
+---
+
+# 3. Use `/docs` as Supporting Documentation
+
+If the repository contains a `/docs` directory, inspect the relevant documentation.
+
+Use it to understand:
+
+* Design decisions
+* Architecture
+* Network topology
+* Implementation details
+* Testing methodology
+* Known issues
+* Limitations
+* Development history
+* Configuration procedures
+
+However, documentation must **not override the actual implementation**.
+
+If documentation contradicts the code, configuration, or tests, resolve the discrepancy using the actual repository implementation.
+
+Do not blindly copy documentation into the final report.
+
+---
+
+# 4. Source-of-Truth Priority
+
+Use the following priority when determining factual correctness:
+
+```text
+Actual source code
+        ↓
+Configuration files
+        ↓
+Tests
+        ↓
+Scripts
+        ↓
+Documentation
+        ↓
+Existing report.tex
+```
+
+Never allow an outdated statement in `report.tex` or `/docs` to override the actual implementation.
+
+---
+
+# 5. Generate a Network-Oriented Academic Report
+
+The report should follow the general structure of the reference academic report style, but it must be adapted specifically to the **Intelligent Network Configuration Assistant**.
+
+The report should be highly technical and strongly network-oriented.
+
+Keep discussion of:
+
+* LLMs
+* AI agents
+* Natural-language interfaces
+* Prompting
+
+to the **minimum necessary level**.
+
+The project should primarily be presented as a:
+
+> **network configuration, control, validation, and automation system**
+
+rather than as an AI/LLM project.
+
+---
+
+# 6. Recommended Report Structure
+
+Adapt the following structure according to what actually exists in the repository.
+
+Do not force sections that are unsupported by the implementation.
+
+```text
+Title
+Authors / Affiliations
+
+Abstract
+
+Keywords
+
+1. Introduction
+    1.1 Network Configuration and Management
+    1.2 Linux Networking Fundamentals
+    1.3 Container Networking
+    1.4 Network Configuration Mechanisms
+    1.5 Intelligent Network Configuration Assistant
+
+2. System Setup
+    2.1 Software and Packages
+    2.2 Hardware / Operating Environment
+    2.3 Docker Network Topology
+    2.4 Network Configuration
+    2.5 Build and Startup Procedure
+
+3. System Architecture
+    3.1 Overall Architecture
+    3.2 Control Plane and Data Plane
+    3.3 Docker Network Architecture
+    3.4 Network Controller
+    3.5 MCP Server and Network Tools
+    3.6 Policy Engine
+    3.7 Validation Architecture
+
+4. Network Configuration Implementation
+    4.1 Client Blocking
+    4.2 Client Unblocking
+    4.3 Bandwidth Limiting
+    4.4 Firewall / Netfilter Configuration
+    4.5 Traffic Control
+    4.6 Network Namespace Interaction
+    4.7 Dynamic Client Discovery
+    4.8 Configuration Cleanup and State Management
+
+5. Network Traffic Control
+    5.1 Packet Filtering
+    5.2 Traffic Direction
+    5.3 Egress Traffic Control
+    5.4 Ingress Traffic Control
+    5.5 TBF / qdisc Configuration
+    5.6 IFB / Redirect Mechanism, if implemented
+    5.7 Docker Bridge Interaction
+    5.8 Packet Flow Analysis
+    5.9 Known Traffic-Control Limitations
+
+6. Policy and Configuration Workflow
+    6.1 Configuration Request
+    6.2 Input Validation
+    6.3 Policy Enforcement
+    6.4 MCP Tool Invocation
+    6.5 Network Configuration
+    6.6 Active Validation
+    6.7 Error Handling
+
+7. Validation and Testing
+    7.1 Validation Architecture
+    7.2 Input Validation
+    7.3 Connectivity Validation
+    7.4 Bandwidth Validation
+    7.5 Unit Tests
+    7.6 Integration Tests
+    7.7 MCP Tests
+    7.8 Network Tests
+    7.9 End-to-End Tests
+    7.10 Failure and Edge-Case Tests
+
+8. Benchmarking and Performance
+    8.1 Benchmarking Environment
+    8.2 Measurement Tools
+    8.3 Methodology
+    8.4 Metrics
+    8.5 Results
+    8.6 Performance Observations
+
+9. Security Analysis
+    9.1 Network Trust Boundaries
+    9.2 Docker Network Isolation
+    9.3 Privileged Network Controller
+    9.4 Linux Capabilities
+    9.5 Firewall Security
+    9.6 Traffic-Control Security
+    9.7 Input and Command Security
+    9.8 Policy Enforcement
+    9.9 Attack Surface
+    9.10 Security Limitations
+
+10. Technical Challenges and Debugging
+    10.1 Docker Networking Issues
+    10.2 Network Namespace Issues
+    10.3 Firewall / Netfilter Issues
+    10.4 Traffic-Control Issues
+    10.5 Ingress / Egress Issues
+    10.6 Validation Issues
+    10.7 Integration Issues
+    10.8 Resolved Problems
+
+11. Limitations and Future Improvements
+    11.1 Network Limitations
+    11.2 Security Limitations
+    11.3 Traffic-Control Limitations
+    11.4 Validation Limitations
+    11.5 Platform Dependencies
+    11.6 Reliability Limitations
+    11.7 Future Improvements
+
+12. Results and Discussion
+
+13. Conclusion
+
+References
+```
+
+Modify this structure when necessary based on the actual repository.
+
+---
+
+# 7. Project Overview
+
+The report should establish:
+
+* Project name
+* Problem being addressed
+* Motivation
+* Objectives
+* Scope
+* System workflow
+* Major components
+* Overall architecture
+
+Keep this concise and technical.
+
+Avoid generic statements about AI.
+
+---
+
+# 8. Network Architecture
+
+This is one of the most important parts of the report.
+
+Document the actual implementation in detail.
+
+Determine from the repository:
+
+* Docker network name
+* Subnet
+* Gateway
+* Container IP addresses
+* Client containers
+* Server container
+* Network controller
+* Docker bridge
+* Network interfaces
+* veth relationships
+* Network namespaces
+* Routing
+* Interface ownership
+* Packet paths
+* Client-to-server communication
+* Client-to-client communication
+* Controller-to-network interaction
+* Host networking
+* Network isolation
+* Required privileges
+
+Do not assume these values.
+
+Extract them from the actual project.
+
+---
+
+# 9. Network Topology Diagram
+
+Create an accurate technical network topology diagram in LaTeX.
+
+The diagram should represent the actual architecture.
+
+Where appropriate, show:
+
+```text
+                    Network Controller
+                           |
+                    nft / tc operations
+                           |
+                    Linux Host / Bridge
+                           |
+          +----------------+----------------+
+          |                |                |
+       client1           server          client2
+```
+
+Include actual:
+
+* IP addresses
+* interfaces
+* namespaces
+* bridge
+* controller relationship
+* network boundaries
+
+Do not include components that do not exist.
+
+Use the existing diagram style in `report.tex` where possible.
+
+If TikZ is already used, prefer TikZ.
+
+If another diagram mechanism is already established in the document, preserve that approach.
+
+---
+
+# 10. MCP Implementation
+
+Document only the actual MCP implementation.
+
+Include:
+
+* MCP server
+* MCP tools
+* Tool names
+* Tool inputs
+* Tool outputs
+* Tool execution flow
+* Assistant → MCP communication
+* MCP → network operation
+* Error handling
+* Validation
+* Security implications
+* Tool limitations
+
+Do not provide a long generic explanation of MCP.
+
+The purpose of this section is to explain **how MCP is actually used in this project**.
+
+---
+
+# 11. LLM / AI Integration
+
+Keep this section short.
+
+Only document what is necessary to understand the system.
+
+If applicable, describe:
+
+```text
+Natural-language request
+        ↓
+Assistant
+        ↓
+LLM
+        ↓
+Structured operation
+        ↓
+Validation / Policy
+        ↓
+MCP Tool
+        ↓
+Network Configuration
+        ↓
+Active Validation
+```
+
+Only use this workflow if it matches the actual implementation.
+
+Do not make the report primarily about the LLM.
+
+Do not discuss prompt engineering unless it is technically relevant to network safety.
+
+---
+
+# 12. Network Operations
+
+Analyze every implemented network operation.
+
+At minimum investigate:
+
+```text
+block_client
+unblock_client
+limit_bandwidth
+```
+
+For every operation document:
+
+* Purpose
+* Input
+* Validation
+* Policy requirements
+* Network commands
+* Interfaces affected
+* Packet direction
+* Expected behavior
+* Actual behavior
+* Verification method
+* Failure handling
+* Cleanup
+* Rollback
+* Known limitations
+
+Where useful, provide concise command snippets.
+
+Do not invent commands that are not actually used.
+
+---
+
+# 13. Firewall / Netfilter Implementation
+
+Analyze the actual firewall implementation.
+
+Document:
+
+* nftables or iptables
+* Tables
+* Chains
+* Rules
+* Rule direction
+* Packet path
+* Docker forwarding
+* Bridge filtering
+* `br_netfilter`
+* Interface matching
+* Required privileges
+* Interaction with Docker
+* Rule insertion/removal
+* Cleanup
+* Persistence
+* Known issues
+
+Explain why the implemented mechanism works in the Docker network topology.
+
+If there are firewall bypasses or limitations, explicitly document them.
+
+---
+
+# 14. Traffic Control / Bandwidth Limiting
+
+Analyze this area carefully.
+
+Document:
+
+* `tc`
+* qdiscs
+* TBF
+* ingress
+* egress
+* interfaces
+* traffic direction
+* Docker bridge behavior
+* bandwidth configuration
+* rate units
+* burst parameters
+* validation methodology
+* cleanup
+* IFB, if implemented
+* redirect/mirred mechanisms, if implemented
+
+Explicitly distinguish:
+
+```text
+Egress:
+client → network
+
+Ingress:
+network → client
+```
+
+Do not claim bidirectional bandwidth control unless the actual implementation and tests prove it.
+
+If only egress traffic is controlled, state that clearly.
+
+If ingress control is implemented through IFB or another mechanism, document the complete packet path.
+
+---
+
+# 15. Policy Engine
+
+Document the actual policy system.
+
+Include:
+
+* Policy configuration
+* Policy format
+* Rules
+* Allowed operations
+* Rate restrictions
+* Client restrictions
+* Invalid requests
+* Policy evaluation
+* Relationship between policy and network operations
+
+Clearly show where policy enforcement occurs.
+
+---
+
+# 16. Validation System
+
+Document validation in detail.
+
+Distinguish between:
+
+### Input Validation
+
+Examples:
+
+* Client validation
+* Operation validation
+* Rate validation
+* Request schema validation
+* Pydantic models
+
+and:
+
+### Network Behavior Validation
+
+Examples:
+
+* Ping
+* Connectivity checks
+* iperf3
+* Packet behavior
+* Bandwidth measurement
+* Expected vs actual behavior
+
+Document:
+
+* Validation requests
+* Validation results
+* Failure detection
+* Active verification
+* Rollback triggers, if implemented
+
+Never confuse successful input validation with successful network configuration.
+
+---
+
+# 17. Testing
+
+Analyze every test file in the repository.
+
+Identify:
+
+* Unit tests
+* Integration tests
+* MCP tests
+* Policy tests
+* Validation tests
+* Network tests
+* End-to-end tests
+* Manual tests
+* Failure tests
+
+For important tests, present concise tables containing:
+
+| Test | Purpose | Input | Expected | Actual | Status |
+| ---- | ------- | ----- | -------- | ------ | ------ |
+
+Do not invent test results.
+
+If a test exists but was not executed, distinguish that from a passing test.
+
+---
+
+# 18. Benchmarking
+
+Determine whether formal benchmarking actually exists.
+
+If it exists, document:
+
+* Environment
+* Tools
+* Metrics
+* Number of runs
+* Methodology
+* Throughput
+* Latency
+* Execution time
+* Resource usage
+* Results
+* Observations
+
+If formal benchmarking does not exist, explicitly state:
+
+> No formal benchmark was implemented/performed.
+
+Do not fabricate performance numbers.
+
+---
+
+# 19. Security Analysis
+
+Perform a genuine technical security analysis.
+
+Analyze:
+
+* Privileged containers
+* Docker capabilities
+* Host networking
+* `CAP_NET_ADMIN`
+* Kernel/module access
+* Docker socket access, if present
+* `iptables`/nftables access
+* `tc` access
+* Network namespace access
+* Client isolation
+* Server exposure
+* Input validation
+* Command execution
+* Command injection risks
+* Policy bypass
+* IP spoofing
+* IP reuse
+* IPv6 bypasses
+* Firewall bypasses
+* Traffic-control bypasses
+* Container escape implications
+* Controller compromise
+* Denial-of-service risks
+* Configuration abuse
+* Missing authentication/authorization, if applicable
+
+Be critical.
+
+Do not describe the system as secure simply because tests pass.
+
+Clearly distinguish:
+
+```text
+Implemented security control
+        vs
+Missing security control
+        vs
+Known limitation
+        vs
+Untested assumption
+```
+
+---
+
+# 20. Failure Handling and Reliability
+
+Analyze what happens when:
+
+* Docker fails
+* A container disappears
+* A network interface disappears
+* Firewall configuration fails
+* `tc` configuration fails
+* Validation fails
+* MCP fails
+* Controller crashes
+* A configuration operation partially succeeds
+* A command returns an error
+* A client is recreated
+* Network state becomes inconsistent
+
+Determine whether the implementation has:
+
+* Rollback
+* Cleanup
+* Idempotency
+* Retry
+* State verification
+* Recovery
+* Persistence
+* Drift detection
+
+Do not claim these mechanisms unless they actually exist.
+
+---
+
+# 21. Technical Challenges
+
+Identify significant technical problems encountered during development **only when supported by repository evidence or documented project history**.
+
+For each significant challenge use:
+
+```text
+Problem
+    ↓
+Symptoms
+    ↓
+Investigation
+    ↓
+Root Cause
+    ↓
+Solution
+    ↓
+Result
+```
+
+Pay particular attention to:
+
+* Docker networking
+* Network namespaces
+* veth interfaces
+* Linux bridges
+* iptables/nftables
+* FORWARD behavior
+* br_netfilter
+* tc
+* ingress/egress shaping
+* IFB
+* privileged networking
+* kernel modules
+* validation
+* MCP integration
+* environment configuration
+
+---
+
+# 22. Design Limitations
+
+Explicitly document real limitations.
+
+Possible areas include:
+
+* Network limitations
+* Security weaknesses
+* Platform dependencies
+* Linux/kernel dependencies
+* Docker limitations
+* Traffic-control limitations
+* Validation limitations
+* Monitoring limitations
+* Scalability limitations
+* Reliability limitations
+* Missing recovery
+* Missing authentication
+* Missing authorization
+* IPv6 handling
+* State persistence
+
+Do not hide technical weaknesses.
+
+Clearly distinguish:
+
+```text
+Implemented
+Partially implemented
+Tested
+Manually verified
+Known limitation
+Not implemented
+Future improvement
+```
+
+---
+
+# 23. Technical Achievements
+
+Identify genuinely significant technical solutions developed in the project.
+
+Examples may include:
+
+* Docker network configuration
+* Cross-namespace network control
+* Firewall configuration
+* Bridge filtering
+* Traffic shaping
+* Ingress traffic handling
+* Dynamic Docker client discovery
+* Active network validation
+* Policy-controlled configuration
+* Reliable cleanup
+* Network-state verification
+
+Only include achievements supported by the implementation.
+
+For each major achievement, explain briefly:
+
+```text
+Problem
+Approach
+Key technical insight
+Solution
+Result
+```
+
+Avoid exaggerated claims.
+
+---
+
+# 24. Diagrams and Visuals
+
+The final LaTeX report should contain technically useful diagrams where appropriate.
+
+Potential diagrams:
+
+### Overall architecture
+
+```text
+User
+ ↓
+Assistant
+ ↓
+Policy / Validation
+ ↓
+MCP Server
+ ↓
+Network Tools
+ ↓
+Docker Network
+ ↓
+Clients / Server
+ ↓
+Validation
+```
+
+Only use the actual project flow.
+
+### Network topology
+
+Show:
+
+* Network controller
+* Docker bridge
+* client1
+* server
+* client2
+* IP addresses
+* Interfaces
+* Network namespaces
+* Control-plane relationship
+
+### Packet flow
+
+Show relevant paths such as:
+
+```text
+client → bridge → server
+```
+
+and:
+
+```text
+client → bridge → client
+```
+
+For firewall operations, show where packets are filtered.
+
+For bandwidth operations, show where `tc` is applied.
+
+### Configuration workflow
+
+Show:
+
+```text
+Request
+ ↓
+Validation
+ ↓
+Policy
+ ↓
+MCP
+ ↓
+Network operation
+ ↓
+Active verification
+```
+
+All diagrams must match the actual implementation.
+
+---
+
+# 25. Tables and Technical Evidence
+
+Use tables where they improve clarity.
+
+Useful tables include:
+
+### Network configuration
+
+| Component | IP | Interface | Role |
+| --------- | -- | --------- | ---- |
+
+### Network operations
+
+| Operation | Mechanism | Direction | Verification |
+| --------- | --------- | --------- | ------------ |
+
+### Test cases
+
+| Test | Expected | Actual | Status |
+| ---- | -------- | ------ | ------ |
+
+### Security findings
+
+| Area | Finding | Severity | Risk | Recommendation |
+| ---- | ------- | -------- | ---- | -------------- |
+
+### Dependencies
+
+| Component | Purpose | Requirement |
+| --------- | ------- | ----------- |
+
+Do not create tables merely for formatting.
+
+---
+
+# 26. Report Style
+
+The report must be an academic technical report.
+
+Use:
+
+* Concise technical prose
+* Clear subsections
+* Bullets where appropriate
+* Tables
+* Figures
+* Equations only where useful
+* Code snippets where technically useful
+* Accurate terminology
+* Proper captions
+* Cross-references
+* Consistent numbering
+
+Avoid:
+
+* Marketing language
+* Repetitive explanations
+* Generic textbook content
+* Excessive discussion of AI
+* Unsupported claims
+* Filler paragraphs
+* Artificially inflated complexity
+
+The report can be as long as necessary.
+
+There is **no page limit**.
+
+Prioritize technical completeness and correctness over page count.
+
+---
+
+# 27. Preserve Existing LaTeX Formatting
+
+Do not unnecessarily change the existing formatting of `report.tex`.
+
+Preserve, where possible:
+
+* Document class
+* Packages
+* Margins
+* Font
+* Colors
+* Heading style
+* Header/footer
+* Title formatting
+* Tables
+* Figure style
+* Caption style
+* Spacing
+* Code formatting
+* Bibliography style
+
+If additional packages are genuinely required for diagrams, tables, code, or other technical content, add them carefully.
+
+Avoid introducing unnecessary dependencies.
+
+---
+
+# 28. References
+
+Inspect the existing references and determine which are actually relevant.
+
+Add references where necessary for:
+
+* Linux networking
+* Docker networking
+* Netfilter
+* nftables/iptables
+* Traffic control
+* TBF
+* IFB
+* Network namespaces
+* MCP, only where necessary
+* Other technologies actually used
+
+Do not add references merely to make the report appear academic.
+
+Do not fabricate citations.
+
+---
+
+# 29. Accuracy Rules
+
+### Never invent
+
+Do not invent:
+
+* Test results
+* Benchmark numbers
+* Performance claims
+* Network behavior
+* Security controls
+* Features
+* Architecture components
+* Team contributions
+* Implementation details
+* Results
+
+### Verify every technical claim
+
+Especially verify:
+
+* IP addresses
+* Ports
+* Interfaces
+* Container names
+* Network names
+* Tool names
+* Function names
+* Firewall chains
+* Firewall rules
+* tc configuration
+* Packet direction
+* Validation behavior
+* Docker configuration
+* Capabilities
+* Kernel requirements
+
+---
+
+# 30. Final Consistency Check
+
+Before finishing, compare the entire generated report against the repository.
+
+Verify:
+
+* Network topology matches implementation
+* IP addresses match configuration
+* Container names match configuration
+* Tool names match source code
+* Function names match source code
+* Ports match configuration
+* Diagrams match implementation
+* Test results match actual tests
+* Bandwidth behavior is accurately described
+* Firewall behavior is accurate
+* Security claims are justified
+* Limitations are not contradicted
+* All sections are internally consistent
+
+If there is a discrepancy, use the repository implementation as the source of truth.
+
+---
+
+# 31. Compile the LaTeX Report
+
+After updating `report.tex`:
+
+1. Compile the report.
+2. Fix LaTeX errors.
+3. Fix missing references.
+4. Fix broken figures.
+5. Fix table overflow where practical.
+6. Fix undefined citations.
+7. Fix malformed diagrams.
+8. Recompile until the document builds successfully.
+
+Use the project's existing LaTeX build mechanism if one exists.
+
+Do not leave the report in a knowingly broken compilation state.
+
+---
+
+# 32. Final Audit
+
+Before completing the task, verify:
+
+1. Entire repository inspected
+2. Existing `report.tex` inspected
+3. `/docs` inspected where relevant
+4. Actual implementation understood
+5. Network architecture documented
+6. Docker topology documented
+7. Network operations documented
+8. Firewall mechanisms documented
+9. Traffic control documented
+10. Ingress/egress behavior accurately documented
+11. MCP implementation documented
+12. Policy engine documented
+13. Validation documented
+14. Testing documented
+15. Benchmarking documented where applicable
+16. Security analyzed
+17. Failure handling analyzed
+18. Technical challenges documented
+19. Limitations documented
+20. Important technical achievements documented
+21. Diagrams are accurate
+22. Tables contain only verified information
+23. References are valid
+24. LaTeX compiles successfully
+25. No unsupported claims remain
+
+---
+
+# 33. Final Deliverable
+
+The primary deliverable is:
+
+```text
+report.tex
+```
+
+Actually modify the existing `report.tex` in the repository.
+
+Do not merely provide recommendations.
+
+Do not create a separate Markdown report as the primary output.
+
+At the end, provide a concise summary:
+
+```text
+Report updated:
+- report.tex
+
+Major sections added/updated:
+- ...
+
+Major technical findings incorporated:
+- ...
+
+Major corrections:
+- ...
+
+Important limitations documented:
+- ...
+
+Diagrams added/updated:
+- ...
+
+Testing/benchmarking evidence included:
+- ...
+
+LaTeX compilation:
+- Success / Failure
+```
+
+The final report must represent the **actual Intelligent Network Configuration Assistant implementation**, with emphasis on **computer networking, Docker networking, Linux networking, firewalling, traffic control, validation, security, reliability, and technical implementation**.
+
+Keep AI/LLM discussion minimal and subordinate to the networking aspects of the project.
 
 
