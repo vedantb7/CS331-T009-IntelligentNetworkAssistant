@@ -8,8 +8,10 @@ app:
   log_level: "INFO"
 
 network:
-  interface: "wlan0"
-  subnet: "192.168.10.0/24"
+  # Explicit Wi-Fi interface for AP mode (e.g., "wlp8s0" or "wlan1").
+  # Set to null or leave empty to allow unambiguous automatic discovery of a dedicated non-uplink wireless interface.
+  interface: null
+  subnet: "192.168.10.1/24"
 
 mcp_server:
   host: "127.0.0.1"

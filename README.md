@@ -4,7 +4,45 @@ INA v2 is an intelligent network configuration and policy management system buil
 
 Initially deployed on a Fedora laptop test environment, the system is designed with portability in mind for potential future migration to edge devices like a Raspberry Pi.
 
-> **Project Status:** Initial Repository Skeleton. Application logic, network drivers, and runtime dependencies have not yet been implemented.
+> **Project Status:** Milestone 2.1 — AP Configuration & Preflight Diagnostics Refined.
+> Host network discovery, dynamic interface resolution, and safe NetworkManager AP profile management are operational and covered by unit tests. Forwarding rules, firewall filtering, and policy enforcement are pending future milestones.
+
+---
+
+## Quick Start
+
+### 1. Read-Only Host Network Discovery
+Inspect host network interfaces, active routes, and wireless driver AP support:
+
+```bash
+# Print human-readable network discovery report
+python3 -m network.device_discovery
+
+# Export discovery data as structured JSON
+python3 -m network.device_discovery --json
+```
+
+### 2. Access Point Profile Management (Safe & Dry-Run by Default)
+Inspect AP profile status, run pre-flight safety checks, and preview planned `nmcli` operations. Target interface is resolved dynamically via strict precedence (CLI `--interface` > `config/settings.yaml` > `NETWORK_INTERFACE` > unambiguous discovery), and active uplink interfaces are never selected automatically:
+
+```bash
+# Inspect AP profile status and pre-flight safety diagnostics
+python3 -m network.access_point status
+
+# Inspect status targeting an explicit interface (e.g., secondary Wi-Fi dongle)
+python3 -m network.access_point status --interface wlan1
+
+# Preview AP profile creation (dry-run mode, safe)
+python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123
+
+# Live creation (requires --no-dry-run)
+python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123 --no-dry-run
+```
+
+### 3. Run Unit Tests (No Root or External Dependencies Required)
+```bash
+python3 -m unittest discover tests/unit -v
+```
 
 ---
 
@@ -40,14 +78,15 @@ intelligent-network-assistant-v2/
 │   ├── rules.yaml           # Security and operational policy definitions (placeholder)
 │   └── roles.yaml           # User/agent roles and permissions (placeholder)
 ├── network/                 # Network management and execution modules
-│   ├── device_discovery.py  # Host and device discovery on managed subnet
+│   ├── device_discovery.py  # Host discovery & interface/routing inspection (Implemented)
+│   ├── access_point.py      # NetworkManager AP profile lifecycle & safety (Implemented)
 │   ├── access_control.py    # Firewall, MAC filtering, and quarantine controls
 │   ├── bandwidth.py         # Bandwidth limits and QoS traffic shaping
 │   └── verification.py      # Post-execution state verification
 ├── config/                  # Configuration files
 │   └── settings.yaml        # System and environment settings (placeholder)
 ├── tests/                   # Automated test suites
-│   ├── unit/                # Unit tests for isolated components
+│   ├── unit/                # Unit tests (test_device_discovery, test_access_point)
 │   ├── integration/         # End-to-end and MCP integration tests
 │   └── conftest.py          # Pytest fixtures and shared testing utilities
 ├── scripts/                 # Operational and maintenance helper scripts
