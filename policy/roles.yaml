@@ -1,0 +1,19 @@
+# Policy Roles and Permissions Configuration
+# NOTE: The roles and permissions defined here are initial placeholders.
+# Implementation and final schema will be defined in subsequent milestones.
+
+version: "1.0"
+roles:
+  admin:
+    description: "Full access to configure network policies, device admission, and bandwidth"
+    permissions:
+      - "network:discovery"
+      - "network:access_control"
+      - "network:bandwidth"
+      - "policy:manage"
+  viewer:
+    description: "Read-only access to network status and device inventory"
+    permissions:
+      - "network:discovery:read"
+      - "network:status:read"
+

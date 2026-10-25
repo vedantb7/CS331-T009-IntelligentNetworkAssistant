@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "intelligent-network-assistant-v2"
+version = "0.1.0"
+description = "Intelligent Network Configuration Assistant v2"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "INA v2 Team" }
+]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+

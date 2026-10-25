@@ -1,0 +1,14 @@
+# Policy Rules Configuration
+# NOTE: The policies defined here are initial placeholders.
+# Implementation and final schema will be defined in subsequent milestones.
+
+version: "1.0"
+rules:
+  - id: "placeholder-rule-001"
+    name: "Default Deny All"
+    description: "Placeholder rule to enforce default-deny posture on unauthorized devices"
+    enabled: false
+    action: "deny"
+    conditions:
+      network: "test-network"
+

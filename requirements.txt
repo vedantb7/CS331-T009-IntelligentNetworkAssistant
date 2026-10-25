@@ -1,0 +1,3 @@
+# Intelligent Network Configuration Assistant v2 (INA v2)
+# Dependencies will be specified during subsequent implementation milestones.
+

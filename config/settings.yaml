@@ -1,0 +1,17 @@
+# System Configuration Settings
+# NOTE: The settings defined here are initial placeholders.
+# Implementation and final configuration structure will be defined in subsequent milestones.
+
+app:
+  name: "intelligent-network-assistant-v2"
+  environment: "development"
+  log_level: "INFO"
+
+network:
+  interface: "wlan0"
+  subnet: "192.168.10.0/24"
+
+mcp_server:
+  host: "127.0.0.1"
+  port: 8000
+
