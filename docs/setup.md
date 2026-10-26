@@ -1,225 +1,408 @@
-# INA v2 Setup & Operational Guide
+# Raspberry Pi 5 Router Setup Guide
 
-## Overview
+This document is a comprehensive, reproducible step-by-step setup guide for building the **INA v2** dedicated network router infrastructure from scratch on a **Raspberry Pi 5**.
 
-This document provides setup instructions, prerequisite details, and operational guidance for **Intelligent Network Configuration Assistant v2 (INA v2)**.
-
-> **Current Implementation Status:** Milestone 2 — Safe Access Point Management Implemented.
-> Read-only host network discovery and safe NetworkManager AP profile management are operational. Packet forwarding, firewall rules, and policy enforcement are pending future milestones.
+The Raspberry Pi 5 acts as the central router and Wi-Fi access point (`INA-Router`), while connected client devices (including a Fedora developer workstation) join as standard wireless clients.
 
 ---
 
-## Prerequisites
+## 1. Hardware & Environmental Prerequisites
 
-- **Operating System:** Linux (Fedora 38+ recommended for development; Raspberry Pi OS planned for edge deployment).
-- **Python:** Python 3.11+ (standard library only; no external package installations required).
-- **Host Network Utilities:**
-  - `iproute2` (`/usr/bin/ip`): Used for querying interfaces, links, and routing tables.
-  - `iw` (`/usr/bin/iw`): Used for wireless interface detection and driver AP capability verification.
-  - `NetworkManager` (`/usr/bin/nmcli`): Used for managing wireless connection profiles and shared IPv4 mode.
-
----
-
-## Running the Read-Only Network Discovery Report
-
-The network discovery module inspects the host network without making any changes to interfaces, routing, or firewall configuration.
-
-### Text Summary (Standard CLI)
-
-To print a human-readable diagnostic report:
-
-```bash
-python3 -m network.device_discovery
-```
-
-### JSON Export
-
-To export the raw structured data model as JSON for integration or automated parsing:
-
-```bash
-python3 -m network.device_discovery --json
-```
+- **Router Host:** Raspberry Pi 5 (4GB or 8GB model recommended).
+- **Storage:** MicroSD card (16 GB minimum, Class 10 / A2 rated).
+- **Power Supply:** Official Raspberry Pi 27W USB-C Power Supply.
+- **Client Device:** Linux workstation (e.g., Fedora Workstation) with Wi-Fi support.
+- **Internet Uplink:** 4G/5G mobile phone hotspot (e.g. `1+ Four`) or secondary Wi-Fi access point.
+- **Network Interface Requirements:** Built-in wireless interface (`wlan0`) supporting nl80211 virtual interface creation (`type __ap`).
 
 ---
 
-## Illustrative Output (Example)
+## 2. Flashing & OS Pre-Configuration
 
-> **Note:** The following output is illustrative. Actual output will reflect your machine's physical and virtual network adapters.
-
-```text
-==============================================================================
-INA v2 — Host Network Discovery Report
-Timestamp: 2026-10-25T14:14:12Z | Platform: Linux 6.11.4-200.fc40.x86_64 (x86_64)
-==============================================================================
-
-[ OBSERVED FACTS ]
-
-1. Detected Network Interfaces:
-   • lo:
-       State: UNKNOWN | Type: loopback   | Link: loopback | MAC: 00:00:00:00:00:00
-       Flags: LOOPBACK, UP, LOWER_UP
-       IPV4: 127.0.0.1/8 (scope: host)
-       IPV6: ::1/128 (scope: host)
-   • enp7s0:
-       State: DOWN    | Type: ethernet   | Link: ether    | MAC: 40:c2:ba:45:b3:20
-       Flags: BROADCAST, MULTICAST
-       IP Addresses: (none assigned)
-   • wlp8s0:
-       State: UP      | Type: wireless   | Link: ether    | MAC: 02:b5:eb:ed:f5:75
-       Flags: BROADCAST, MULTICAST, UP, LOWER_UP
-       IPV4: 192.168.1.150/24 (scope: global)
-       Wi-Fi Details: Wireless device | AP Mode Advertised: Yes (Driver advertises AP mode support)
-   • wg0:
-       State: UNKNOWN | Type: tunnel     | Link: none     | MAC: (none)
-       Flags: POINTOPOINT, UP, LOWER_UP
-       IPV4: 10.8.0.2/24 (scope: global)
-       Tunnel Details: wireguard (WireGuard VPN tunnel)
-
-2. Routing Table Entries:
-   Observed 3 route(s), including 1 default route(s):
-   • default via 192.168.1.1 dev wlp8s0 metric 600 proto dhcp [DEFAULT]
-   • 192.168.1.0/24 dev wlp8s0 proto kernel metric 600
-   • 10.8.0.0/24 dev wg0 proto kernel
-
-------------------------------------------------------------------------------
-[ INFERRED CANDIDATES & ANALYSIS ]
-* Note: The following items are heuristics inferred from the observed facts above.
-
-1. Uplink Candidate(s):
-   • wlp8s0 (PRIMARY): via 192.168.1.1 (metric: 600) [UP]
-     Analysis: Lowest metric default route; primary candidate for host outbound connectivity.
-
-2. Access Point (AP) Candidate(s):
-   • wlp8s0 [AP Capable]:
-     Analysis: Driver explicitly advertises AP mode support. Currently acting as primary uplink; configuring AP here requires virtual AP (VIF) support or a secondary Wi-Fi adapter.
-
-3. Tunnel / Routing-Impacting Interfaces:
-   • wg0 (type: wireguard):
-     Analysis: WireGuard VPN tunnel. Has active routes in kernel table; may divert or encapsulate subnet traffic.
-
-------------------------------------------------------------------------------
-[ WARNINGS & DIAGNOSTICS ]
-   (No warnings encountered)
-==============================================================================
-```
+1. Insert the microSD card into your workstation and open **Raspberry Pi Imager**.
+2. Select:
+   - **Device:** Raspberry Pi 5
+   - **Operating System:** Raspberry Pi OS (Other) → **Raspberry Pi OS Lite (64-bit)** (Debian Trixie base)
+   - **Storage:** Select your microSD card
+3. Click **Next** and click **Edit Settings** (OS Customization):
+   - **General Tab:**
+     - Set Hostname: `ina-router`
+     - Set Username and Password: `team009` (Set a strong administrative password)
+     - Wireless LAN: You may enter your temporary configuration or configure it post-boot.
+     - Wireless LAN Country: Set your ISO country code (e.g., `IN` for India, `US` for United States).
+     - Locale and Time Zone: Configure appropriate local timezone.
+   - **Services Tab:**
+     - Enable SSH (Select **Use password authentication** or provide your workstation's public SSH key).
+4. Save settings and flash the card.
 
 ---
 
-## Access Point Management (`network.access_point`)
+## 3. Initial Boot & SSH Access
 
-The access point management module enables configuring and managing a dedicated test network Wi-Fi hotspot through NetworkManager (`nmcli`).
-
-### Configuration Parameters
-
-| Parameter | Default | Validation & Description |
-| :--- | :--- | :--- |
-| `--ssid` | `INA-Test-Network` | 1-32 bytes UTF-8 string without control characters. |
-| `--password` | *(Required)* | 8-63 ASCII characters (or 64 hex characters) for WPA2-Personal PSK. |
-| `--interface`| *(Auto-resolved)* | Target Wi-Fi interface name (`^[a-zA-Z0-9_-]+$`). If omitted, resolved via precedence: CLI > `config/settings.yaml` > `NETWORK_INTERFACE` env var > unambiguous non-uplink discovery. |
-| `--subnet` | `192.168.10.1/24` | Private IPv4 CIDR (/16 to /29). Must not collide with host routes. |
-| `--channel` | `None` (auto) | Wi-Fi channel (1-14 for 2.4GHz; 36-165 for 5GHz). |
-| `--band` | `bg` (2.4GHz) | Wireless band: `bg` (2.4GHz) or `a` (5GHz). |
-| `--profile` | `ina-ap` | Profile name. **Must** start with `ina-` to isolate it from host profiles. |
-
-### Inspecting Status & Pre-Flight Safety
-
-Run a pre-flight inspection to verify whether an INA profile exists and whether the current host network conditions permit safe activation:
-
-```bash
-python3 -m network.access_point status
-```
-
-### Creating the AP Profile
-
-By default, all CLI operations run in **dry-run mode**, printing planned `nmcli` commands without modifying system state. Pass `--no-dry-run` to execute:
-
-```bash
-# Dry-run preview (safe, no changes)
-python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123
-
-# Live creation
-python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123 --no-dry-run
-```
-
-### Activation Safety & Uplink Guards
-
-Activation changes the wireless interface state. To prevent accidental disconnection of remote or SSH sessions:
-- The command requires `--no-dry-run` **and** explicit `--confirm`.
-- If the target interface currently hosts the active internet uplink (e.g. `wlp8s0` connected to `IITGN-SSO`), activation is **strictly refused**:
-
-```text
-Activation REFUSED: Active uplink conflict detected. Interface 'wlp8s0' currently carries
-an active host default route via connection 'IITGN-SSO'. Activating an AP here would sever
-host connectivity. Use a secondary Wi-Fi adapter or Ethernet uplink.
-```
-
-To activate on a verified, non-conflicting interface:
-
-```bash
-python3 -m network.access_point activate --profile ina-ap --no-dry-run --confirm
-```
-
-### Deactivation and Safe Cleanup
-
-Cleanup operations only touch profiles in the `ina-*` namespace:
-
-```bash
-# Deactivate the AP profile
-python3 -m network.access_point deactivate --profile ina-ap --no-dry-run
-
-# Remove the profile entirely from NetworkManager
-python3 -m network.access_point delete --profile ina-ap --no-dry-run
-```
-
-### Recovery Guidance
-
-If an interface was disconnected or an uplink profile disrupted:
-1. Re-activate the primary host Wi-Fi connection:
+1. Insert the microSD card into the Raspberry Pi 5 and connect power.
+2. Allow 60–90 seconds for first boot and partition expansion.
+3. Locate the Pi on your network or connect via mDNS:
    ```bash
-   nmcli connection up IITGN-SSO
+   ssh team009@ina-router.local
    ```
-2. Verify default routing:
+4. Verify system release and hardware:
    ```bash
-   python3 -m network.device_discovery
+   uname -a
+   cat /etc/os-release
    ```
 
 ---
 
-## Running the Unit Tests
+## 4. Connecting the Wi-Fi Uplink (`wlan0`)
 
-The test suite uses Python's built-in `unittest` module and does not require third-party packages or root privileges. All external commands and system files are mocked.
+The Pi uses its physical Wi-Fi adapter (`wlan0`) to connect to the upstream phone hotspot:
 
-To run the full unit test suite:
+1. Scan for available networks:
+   ```bash
+   sudo nmcli dev wifi list
+   ```
+2. Connect to the upstream hotspot:
+   ```bash
+   sudo nmcli dev wifi connect "<YOUR_HOTSPOT_SSID>" password "<YOUR_HOTSPOT_PASSWORD>"
+   ```
+   *(Replace `<YOUR_HOTSPOT_SSID>` and `<YOUR_HOTSPOT_PASSWORD>` with your actual phone hotspot credentials. Never commit real credentials to Git.)*
 
-```bash
-python3 -m unittest discover tests/unit -v
-```
+3. **Verify uplink connectivity before proceeding:**
+   ```bash
+   # Check assigned IP and default gateway
+   ip -4 addr show dev wlan0
+   ip route show default
 
-### Covered Test Scenarios:
-- **Device Discovery:**
-  - Full network discovery and parsing of multiple interfaces (loopback, Ethernet, Wi-Fi, WireGuard, TUN/TAP, SIT).
-  - Missing command handling (`ip` or `iw` not installed).
-  - Corrupted or invalid JSON command output handling.
-  - Host environments with no default route.
-  - Interfaces without assigned IP addresses and inactive links.
-  - Subprocess timeout and permission error handling.
-  - Tri-state Wi-Fi AP capability validation (`True`, `False`, and `None` for unavailable).
-  - Data model serialization (`to_dict()`) and text formatting.
-- **Access Point Management:**
-  - Comprehensive configuration validation (SSID, WPA2 passphrase, CIDR subnet, interface, channels).
-  - Dry-run verification and credential masking in commands and representations.
-  - Profile inspection and distinction between INA-managed and unmanaged host profiles.
-  - Strict protection against modifying or deleting unrelated profiles (e.g. `IITGN-SSO`, `CloudflareWARP`).
-  - Pre-flight detection of active uplink conflicts and single-radio simultaneous operation risks.
-  - Refusal to activate without explicit operator confirmation (`confirm=True`).
-  - Command execution failure and timeout handling.
-  - Post-activation verification failure detection when NetworkManager does not transition to active.
-  - Safe deactivation and cleanup restricted to `ina-*` profiles.
+   # Test external reachability
+   ping -c 3 8.8.8.8
+   ```
+   Do not proceed until the Pi has verified external internet reachability through `wlan0`.
 
 ---
 
-## Known Limitations & Planned Capabilities
+## 5. Installing Core Network Packages
 
-- **Milestone 2 Scope:** Access point management handles profile declaration and activation via NetworkManager. It does **not** install custom packet filtering rules, configure client blocking, manipulate `/proc/sys/net/ipv4/ip_forward` directly, or configure DNS policies.
-- **Single-Radio Hardware Constraints:** Laptops with a single physical Wi-Fi adapter (e.g. `wlp8s0`) cannot maintain an upstream client connection and an AP simultaneously across different channels. Attempting to activate an AP on the uplink Wi-Fi interface is refused by safety checks. A secondary USB Wi-Fi adapter or wired Ethernet connection is recommended.
-- **Wi-Fi Detection:** Querying wireless capabilities requires the `iw` utility. If `iw` is not installed, wireless interfaces will still be detected via sysfs, but AP mode capability will be reported as `Unavailable` (`None`).
+Update package repositories and install the required routing and AP utilities:
+
+```bash
+sudo apt update
+sudo apt install -y hostapd dnsmasq nftables iw iperf3
+```
+
+> **Note on `hostapd`:** On Debian/Raspberry Pi OS, `hostapd` is masked by default upon installation. Unmask it now:
+> ```bash
+> sudo systemctl unmask hostapd
+> ```
+
+---
+
+## 6. Configuring the Access Point Daemon (`hostapd`)
+
+Create the configuration file `/etc/hostapd/hostapd.conf`:
+
+```bash
+sudo nano /etc/hostapd/hostapd.conf
+```
+
+Insert the following verified configuration:
+
+```ini
+# INA v2 Access Point Configuration
+interface=ap0
+driver=nl80211
+ssid=INA-Router
+hw_mode=g
+channel=11
+wmm_enabled=0
+macaddr_acl=0
+auth_algs=1
+ignore_broadcast_ssid=0
+wpa=2
+wpa_passphrase=ConfigureYourStrongPasswordHere
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP
+rsn_pairwise=CCMP
+```
+
+Point the system environment to this configuration file:
+
+```bash
+sudo sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/default/hostapd
+```
+
+---
+
+## 7. Configuring DHCP and DNS (`dnsmasq`)
+
+Back up any default configuration and create the dedicated INA DHCP configuration file:
+
+```bash
+sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
+sudo nano /etc/dnsmasq.d/ina-ap.conf
+```
+
+Insert the following configuration:
+
+```ini
+# INA v2 DHCP and DNS Configuration
+interface=ap0
+bind-interfaces
+listen-address=192.168.50.1
+
+# DHCP IP Pool (192.168.50.10 to 192.168.50.100, 12-hour lease)
+dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,12h
+
+# Publish Default Gateway (Option 3)
+dhcp-option=option:router,192.168.50.1
+
+# Publish DNS Server (Option 6)
+dhcp-option=option:dns-server,192.168.50.1,8.8.8.8
+
+# Authoritative DHCP for this subnet
+dhcp-authoritative
+log-dhcp
+```
+
+---
+
+## 8. Creating the Virtual Interface Script (`ap0`)
+
+Create `/usr/local/sbin/ina-ap-interface.sh` to construct the virtual interface and assign its static IP:
+
+```bash
+sudo nano /usr/local/sbin/ina-ap-interface.sh
+```
+
+Insert the following script:
+
+```bash
+#!/bin/bash
+set -e
+
+# INA v2 Virtual AP Interface Initializer
+IFACE="ap0"
+PHYS="wlan0"
+ROUTER_IP="192.168.50.1/24"
+
+# Create ap0 virtual interface if not present
+if ! ip link show "$IFACE" >/dev/null 2>&1; then
+    echo "Creating virtual interface $IFACE on $PHYS..."
+    iw dev "$PHYS" interface add "$IFACE" type __ap
+fi
+
+# Bring link up
+echo "Bringing $IFACE up..."
+ip link set dev "$IFACE" up
+
+# Assign static router IP if not already present
+if ! ip addr show dev "$IFACE" | grep -q "192.168.50.1"; then
+    echo "Assigning $ROUTER_IP to $IFACE..."
+    ip addr add "$ROUTER_IP" dev "$IFACE"
+fi
+
+echo "$IFACE successfully initialized."
+```
+
+Make the script executable:
+
+```bash
+sudo chmod +x /usr/local/sbin/ina-ap-interface.sh
+```
+
+---
+
+## 9. Systemd Startup Ordering & Readiness
+
+To guarantee that `ap0` exists and has its IP before `hostapd` and `dnsmasq` attempt to bind to it, create a systemd service and drop-in overrides.
+
+### 1. Create `ina-ap-interface.service`
+
+```bash
+sudo nano /etc/systemd/system/ina-ap-interface.service
+```
+
+```ini
+[Unit]
+Description=INA v2 Virtual Access Point Interface Setup
+Before=hostapd.service dnsmasq.service
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ina-ap-interface.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 2. Service Overrides
+
+Create drop-in override for `hostapd`:
+
+```bash
+sudo mkdir -p /etc/systemd/system/hostapd.service.d/
+sudo nano /etc/systemd/system/hostapd.service.d/override.conf
+```
+
+```ini
+[Unit]
+BindsTo=sys-subsystem-net-devices-ap0.device
+After=sys-subsystem-net-devices-ap0.device ina-ap-interface.service
+```
+
+Create drop-in override for `dnsmasq`:
+
+```bash
+sudo mkdir -p /etc/systemd/system/dnsmasq.service.d/
+sudo nano /etc/systemd/system/dnsmasq.service.d/override.conf
+```
+
+```ini
+[Unit]
+After=ina-ap-interface.service hostapd.service
+```
+
+Reload systemd daemon:
+
+```bash
+sudo systemctl daemon-reload
+```
+
+---
+
+## 10. Persistent IPv4 Forwarding
+
+Create `/etc/sysctl.d/99-ina-router.conf` to enable kernel routing:
+
+```bash
+sudo nano /etc/sysctl.d/99-ina-router.conf
+```
+
+```ini
+# INA v2 Router Kernel Forwarding
+net.ipv4.ip_forward=1
+```
+
+Apply immediately:
+
+```bash
+sudo sysctl --system
+```
+
+Verify:
+
+```bash
+sysctl net.ipv4.ip_forward
+# Expected output: net.ipv4.ip_forward = 1
+```
+
+---
+
+## 11. Configuring NAT with `nftables`
+
+Edit `/etc/nftables.conf` to create a modular NAT table.
+
+> **Safety Warning:** Do NOT add `flush ruleset` at the beginning of this configuration. A blanket flush wipes existing firewall rules and Docker/system filters. Use an explicit table namespace (`ip ina_nat`).
+
+```bash
+sudo nano /etc/nftables.conf
+```
+
+Insert the verified NAT configuration:
+
+```text
+#!/usr/sbin/nft -f
+
+table ip ina_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 192.168.50.0/24 oifname "wlan0" masquerade
+    }
+}
+```
+
+Apply and verify:
+
+```bash
+sudo nft -f /etc/nftables.conf
+sudo nft list table ip ina_nat
+```
+
+Expected output:
+```text
+table ip ina_nat {
+    chain postrouting {
+        type nat hook postrouting priority srcnat; policy accept;
+        ip saddr 192.168.50.0/24 oifname "wlan0" masquerade
+    }
+}
+```
+
+---
+
+## 12. Enabling and Starting Services
+
+Enable all services for automatic boot persistence:
+
+```bash
+sudo systemctl enable ina-ap-interface.service
+sudo systemctl enable hostapd.service
+sudo systemctl enable dnsmasq.service
+sudo systemctl enable nftables.service
+
+# Start services
+sudo systemctl start ina-ap-interface.service
+sudo systemctl restart hostapd.service
+sudo systemctl restart dnsmasq.service
+sudo systemctl restart nftables.service
+```
+
+Check status:
+
+```bash
+systemctl is-active ina-ap-interface hostapd dnsmasq nftables
+# Expected output for each: active
+```
+
+---
+
+## 13. Client Connection & Verification
+
+From your client workstation (e.g., Fedora laptop):
+
+1. Scan for Wi-Fi networks and select `INA-Router`.
+2. Enter the passphrase configured in `/etc/hostapd/hostapd.conf`.
+3. Check the assigned IP address on your client Wi-Fi interface:
+   ```bash
+   ip -4 addr show
+   # Should reflect an IP in the 192.168.50.10–100 pool (e.g., 192.168.50.46)
+   ```
+4. Verify local reachability to the Pi router:
+   ```bash
+   ping -c 5 192.168.50.1
+   ```
+5. Verify internet connectivity through the router:
+   ```bash
+   ping -c 5 8.8.8.8
+   ```
+
+---
+
+## 14. Reboot Persistence Test
+
+Verify that all services cleanly recover after a power cycle or reboot:
+
+```bash
+sudo reboot
+```
+
+After the Pi reboots:
+1. Re-connect your workstation to `INA-Router`.
+2. SSH into the Pi: `ssh team009@ina-router.local`.
+3. Confirm services:
+   ```bash
+   systemctl is-active ina-ap-interface hostapd dnsmasq nftables
+   sysctl net.ipv4.ip_forward
+   ```
+   All services must report `active` and forwarding must report `1`.

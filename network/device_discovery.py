@@ -59,6 +59,50 @@ def default_command_runner(args: List[str], timeout: float = 5.0) -> Tuple[int, 
 
 
 @dataclass
+class DHCPLease:
+    """Represents a DHCP lease record from dnsmasq.
+
+    Corresponds to /var/lib/misc/dnsmasq.leases format:
+    <expiry_timestamp> <mac_address> <ip_address> <hostname> [client_id]
+    """
+
+    expiry_epoch: int
+    mac_address: str
+    ip_address: str
+    hostname: Optional[str]  # None if '*' or omitted
+    client_id: Optional[str] = None
+
+
+@dataclass
+class NeighborEntry:
+    """Represents a kernel neighbor table entry (ARP / IPv6 neighbor)."""
+
+    ip_address: str
+    mac_address: Optional[str]
+    interface: str
+    state: str  # REACHABLE, STALE, DELAY, PROBE, FAILED, INCOMPLETE, PERMANENT
+
+
+@dataclass
+class DiscoveredClient:
+    """Represents a client device discovered on the managed local network."""
+
+    ip_address: str
+    mac_address: Optional[str]
+    hostname: Optional[str] = None
+    interface: str = "ap0"
+    neighbor_state: Optional[str] = None
+    lease_expiry: Optional[int] = None
+    is_active: bool = False
+    source: str = "unknown"  # "dhcp", "neighbor", or "both"
+    notes: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert discovered client to a dictionary."""
+        return asdict(self)
+
+
+@dataclass
 class IPAddressInfo:
     """Represents an assigned IPv4 or IPv6 address."""
 
@@ -148,6 +192,7 @@ class NetworkReport:
     uplink_candidates: List[UplinkCandidate] = field(default_factory=list)
     ap_candidates: List[APCandidate] = field(default_factory=list)
     tunnel_candidates: List[TunnelCandidate] = field(default_factory=list)
+    clients: List[DiscoveredClient] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -221,6 +266,20 @@ class NetworkReport:
                 metric_str = f" metric {r.metric}" if r.metric is not None else ""
                 proto_str = f" proto {r.protocol}" if r.protocol else ""
                 lines.append(f"   • {r.destination}{gw_str} dev {r.interface}{metric_str}{proto_str}{def_mark}")
+
+        # ----------------------------------------------------------------------
+        # Connected Clients (AP Network)
+        # ----------------------------------------------------------------------
+        if self.clients:
+            lines.append("\n" + subsep)
+            lines.append("[ CONNECTED CLIENTS (LOCAL ACCESS POINT) ]")
+            for c in self.clients:
+                host_str = f" ({c.hostname})" if c.hostname else " (unassigned hostname)"
+                state_str = f" | State: {c.neighbor_state}" if c.neighbor_state else ""
+                mac_str = c.mac_address or "(unknown MAC)"
+                lines.append(f"   • {c.ip_address} [{mac_str}]{host_str}{state_str} [dev {c.interface}]")
+                for note in c.notes:
+                    lines.append(f"       Note: {note}")
 
         # ----------------------------------------------------------------------
         # Inferred Candidates
@@ -718,12 +777,18 @@ def _analyze_candidates(
 
 def discover_network(
     runner: Optional[CommandRunner] = None,
+    include_clients: bool = False,
+    ap_interface: str = "ap0",
+    leases_file: Optional[str] = "/var/lib/misc/dnsmasq.leases",
 ) -> NetworkReport:
     """Perform read-only network discovery and return a structured NetworkReport.
 
     Args:
         runner: Optional custom CommandRunner for dependency injection / mocking.
                 Defaults to default_command_runner.
+        include_clients: Whether to also discover connected client devices on the AP network.
+        ap_interface: Target AP interface for client discovery (defaults to 'ap0').
+        leases_file: Path to dnsmasq.leases file (defaults to '/var/lib/misc/dnsmasq.leases').
 
     Returns:
         NetworkReport containing observed facts, inferred candidates, and diagnostics.
@@ -799,6 +864,18 @@ def discover_network(
         all_routes=routes,
     )
 
+    # 8. Discover connected clients if requested
+    clients: List[DiscoveredClient] = []
+    if include_clients:
+        try:
+            clients = discover_clients(
+                ap_interface=ap_interface,
+                leases_file=leases_file,
+                runner=runner,
+            )
+        except Exception as exc:
+            warnings.append(f"Failed to query connected clients on {ap_interface}: {exc}")
+
     return NetworkReport(
         timestamp=timestamp,
         platform_info=platform_info,
@@ -808,8 +885,225 @@ def discover_network(
         uplink_candidates=uplink_cands,
         ap_candidates=ap_cands,
         tunnel_candidates=tunnel_cands,
+        clients=clients,
         warnings=warnings,
     )
+
+
+# ==============================================================================
+# Client Discovery Primitives (DHCP Leases and ARP Neighbors)
+# ==============================================================================
+
+
+def parse_dnsmasq_leases(lease_content: str) -> List[DHCPLease]:
+    """Parse dnsmasq.leases format content into structured DHCPLease objects.
+
+    Standard line format:
+    <expiry_timestamp> <mac_address> <ip_address> <hostname> [client_id]
+
+    A hostname of '*' indicates that the client did not provide Option 12 in DHCPREQUEST.
+    Note: The first field is an expiration timestamp (unix epoch), not the assignment time.
+    """
+    leases: List[DHCPLease] = []
+    for line in lease_content.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) < 4:
+            continue
+        try:
+            expiry_epoch = int(parts[0])
+        except ValueError:
+            continue
+        mac = parts[1].lower()
+        ip = parts[2]
+        hostname = parts[3]
+        if hostname == "*":
+            hostname = None
+        client_id = parts[4] if len(parts) >= 5 else None
+        leases.append(
+            DHCPLease(
+                expiry_epoch=expiry_epoch,
+                mac_address=mac,
+                ip_address=ip,
+                hostname=hostname,
+                client_id=client_id,
+            )
+        )
+    return leases
+
+
+def parse_ip_neighbors(
+    output: str,
+    target_interface: Optional[str] = None,
+) -> List[NeighborEntry]:
+    """Parse output from 'ip -j neigh' or 'ip neigh' into NeighborEntry objects.
+
+    Supports both JSON format ('ip -j neigh') and line-based text output ('ip neigh').
+    """
+    entries: List[NeighborEntry] = []
+    output = output.strip()
+    if not output:
+        return entries
+
+    # Attempt JSON parsing first
+    if output.startswith("[") and output.endswith("]"):
+        try:
+            data = json.loads(output)
+            if isinstance(data, list):
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    dev = item.get("dev", "")
+                    if target_interface and dev != target_interface:
+                        continue
+                    ip = item.get("dst", "")
+                    lladdr = item.get("lladdr")
+                    states = item.get("state", [])
+                    state_str = ", ".join(states) if isinstance(states, list) else str(states)
+                    if ip:
+                        entries.append(
+                            NeighborEntry(
+                                ip_address=ip,
+                                mac_address=lladdr.lower() if lladdr else None,
+                                interface=dev,
+                                state=state_str,
+                            )
+                        )
+                return entries
+        except json.JSONDecodeError:
+            pass
+
+    # Line-based fallback
+    # Example: 192.168.50.46 dev ap0 lladdr 5e:22:f6:20:9a:e7 REACHABLE
+    # Example: 192.168.50.12 dev ap0 FAILED
+    for line in output.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        tokens = line.split()
+        if len(tokens) < 3:
+            continue
+        ip = tokens[0]
+        dev = ""
+        lladdr = None
+        state = tokens[-1]
+
+        idx = 1
+        while idx < len(tokens):
+            if tokens[idx] == "dev" and idx + 1 < len(tokens):
+                dev = tokens[idx + 1]
+                idx += 2
+            elif tokens[idx] == "lladdr" and idx + 1 < len(tokens):
+                lladdr = tokens[idx + 1].lower()
+                idx += 2
+            else:
+                idx += 1
+
+        if target_interface and dev != target_interface:
+            continue
+
+        entries.append(
+            NeighborEntry(
+                ip_address=ip,
+                mac_address=lladdr,
+                interface=dev,
+                state=state,
+            )
+        )
+
+    return entries
+
+
+def discover_clients(
+    ap_interface: str = "ap0",
+    leases_file: Optional[str] = "/var/lib/misc/dnsmasq.leases",
+    runner: Optional[CommandRunner] = None,
+) -> List[DiscoveredClient]:
+    """Discover connected client devices by inspecting ARP neighbors and DHCP leases.
+
+    Queries:
+    1. 'ip neigh show dev <ap_interface>' (or 'ip -j neigh') for active neighbor states.
+    2. dnsmasq leases file for IP assignments, expiration, and hostnames.
+
+    Returns:
+        List of DiscoveredClient objects.
+    """
+    if runner is None:
+        runner = default_command_runner
+
+    # 1. Query neighbor table
+    code, out, _ = runner(["ip", "-j", "neigh", "show", "dev", ap_interface], 5.0)
+    if code != 0 or not out.strip() or not out.strip().startswith("["):
+        code, out, _ = runner(["ip", "neigh", "show", "dev", ap_interface], 5.0)
+
+    neighbors = parse_ip_neighbors(out, target_interface=ap_interface) if code == 0 else []
+
+    # 2. Query DHCP leases
+    leases: List[DHCPLease] = []
+    if leases_file and os.path.exists(leases_file):
+        try:
+            with open(leases_file, "r", encoding="utf-8") as f:
+                leases = parse_dnsmasq_leases(f.read())
+        except (OSError, PermissionError):
+            pass
+
+    client_map: Dict[str, DiscoveredClient] = {}
+
+    for lease in leases:
+        notes: List[str] = []
+        if lease.hostname is None:
+            notes.append("Hostname unassigned (client sent '*' in DHCP request)")
+        if lease.mac_address and len(lease.mac_address) >= 2:
+            try:
+                first_byte = int(lease.mac_address[:2], 16)
+                if first_byte & 0x02:
+                    notes.append("MAC address appears randomized (locally administered bit set)")
+            except ValueError:
+                pass
+
+        client = DiscoveredClient(
+            ip_address=lease.ip_address,
+            mac_address=lease.mac_address,
+            hostname=lease.hostname,
+            interface=ap_interface,
+            lease_expiry=lease.expiry_epoch,
+            source="dhcp",
+            notes=notes,
+        )
+        client_map[lease.ip_address] = client
+
+    for neigh in neighbors:
+        if neigh.ip_address in client_map:
+            c = client_map[neigh.ip_address]
+            c.neighbor_state = neigh.state
+            c.source = "both"
+            if neigh.mac_address and not c.mac_address:
+                c.mac_address = neigh.mac_address
+            if neigh.state in ("REACHABLE", "DELAY"):
+                c.is_active = True
+        else:
+            is_active = neigh.state in ("REACHABLE", "DELAY")
+            notes: List[str] = []
+            if neigh.mac_address and len(neigh.mac_address) >= 2:
+                try:
+                    first_byte = int(neigh.mac_address[:2], 16)
+                    if first_byte & 0x02:
+                        notes.append("MAC address appears randomized (locally administered bit set)")
+                except ValueError:
+                    pass
+            client_map[neigh.ip_address] = DiscoveredClient(
+                ip_address=neigh.ip_address,
+                mac_address=neigh.mac_address,
+                interface=neigh.interface,
+                neighbor_state=neigh.state,
+                is_active=is_active,
+                source="neighbor",
+                notes=notes,
+            )
+
+    return list(client_map.values())
 
 
 # ==============================================================================
@@ -829,9 +1123,31 @@ def main() -> None:
         dest="json_output",
         help="Output network discovery results as structured JSON.",
     )
+    parser.add_argument(
+        "--clients",
+        action="store_true",
+        dest="include_clients",
+        help="Discover connected client devices on the local AP network via DHCP and ARP.",
+    )
+    parser.add_argument(
+        "--interface",
+        default="ap0",
+        dest="ap_interface",
+        help="Target AP interface for client discovery (default: 'ap0').",
+    )
+    parser.add_argument(
+        "--leases-file",
+        default="/var/lib/misc/dnsmasq.leases",
+        dest="leases_file",
+        help="Path to dnsmasq leases file (default: '/var/lib/misc/dnsmasq.leases').",
+    )
     args = parser.parse_args()
 
-    report = discover_network()
+    report = discover_network(
+        include_clients=args.include_clients,
+        ap_interface=args.ap_interface,
+        leases_file=args.leases_file,
+    )
 
     if args.json_output:
         print(json.dumps(report.to_dict(), indent=2))

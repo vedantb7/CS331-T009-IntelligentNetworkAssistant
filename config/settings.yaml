@@ -1,19 +1,41 @@
-# System Configuration Settings
-# NOTE: The settings defined here are initial placeholders.
-# Implementation and final configuration structure will be defined in subsequent milestones.
+# ==============================================================================
+# Intelligent Network Configuration Assistant v2 (INA v2) Configuration
+# ==============================================================================
+# Baseline configuration settings aligned with the verified Raspberry Pi 5
+# network infrastructure ('ina-router').
+#
+# NOTE ON ARCHITECTURAL SEPARATION:
+# Host operating system services on the Raspberry Pi 5 ('hostapd', 'dnsmasq',
+# 'ina-ap-interface.service', and 'nftables') configure and manage network interfaces,
+# routing, DHCP, and NAT. The settings below configure the INA Python application
+# modules, defining inspection targets, validation baselines, and service paths.
+# ==============================================================================
 
 app:
   name: "intelligent-network-assistant-v2"
   environment: "development"
   log_level: "INFO"
 
+# Router Network Infrastructure Parameters (Raspberry Pi 5 Host)
 network:
-  # Explicit Wi-Fi interface for AP mode (e.g., "wlp8s0" or "wlan1").
-  # Set to null or leave empty to allow unambiguous automatic discovery of a dedicated non-uplink wireless interface.
-  interface: null
-  subnet: "192.168.10.1/24"
+  router_host: "ina-router"
+  router_ip: "192.168.50.1"
+  ap_interface: "ap0"
+  uplink_interface: "wlan0"
+  ssid: "INA-Router"
+  channel: 11
+  client_subnet: "192.168.50.0/24"
+  dhcp_range_start: "192.168.50.10"
+  dhcp_range_end: "192.168.50.100"
+  dhcp_lease_time: "12h"
+  dnsmasq_leases_file: "/var/lib/misc/dnsmasq.leases"
 
+# FastMCP Server Settings (Planned / Future Milestone)
 mcp_server:
   host: "127.0.0.1"
   port: 8000
 
+# Policy Engine Settings (Planned / Future Milestone)
+policy:
+  rules_file: "policy/rules.yaml"
+  roles_file: "policy/roles.yaml"

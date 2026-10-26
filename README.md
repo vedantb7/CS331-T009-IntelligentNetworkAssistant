@@ -1,109 +1,90 @@
 # Intelligent Network Configuration Assistant v2 (INA v2)
 
-INA v2 is an intelligent network configuration and policy management system built as a Computer Networks project. It enables administrators to manage, monitor, and secure a dedicated test network using natural-language instructions through the Model Context Protocol (MCP).
-
-Initially deployed on a Fedora laptop test environment, the system is designed with portability in mind for potential future migration to edge devices like a Raspberry Pi.
-
-> **Project Status:** Milestone 2.1 — AP Configuration & Preflight Diagnostics Refined.
-> Host network discovery, dynamic interface resolution, and safe NetworkManager AP profile management are operational and covered by unit tests. Forwarding rules, firewall filtering, and policy enforcement are pending future milestones.
+**INA v2** is an automated network management and policy enforcement framework developed as a Computer Networks engineering project. The system manages, monitors, and shapes traffic on a dedicated test network using natural-language instructions communicated via the Model Context Protocol (MCP).
 
 ---
 
-## Quick Start
+## 1. System Architecture at a Glance
 
-### 1. Read-Only Host Network Discovery
-Inspect host network interfaces, active routes, and wireless driver AP support:
+The physical and system-level routing infrastructure is hosted on a **Raspberry Pi 5 (`ina-router`)**, which operates as a dedicated wireless access point and gateway router. Client devices—such as a Fedora developer workstation—connect over Wi-Fi as standard clients.
 
-```bash
-# Print human-readable network discovery report
-python3 -m network.device_discovery
-
-# Export discovery data as structured JSON
-python3 -m network.device_discovery --json
+```text
+Phone Hotspot ("1+ Four") ──[Wi-Fi Uplink]──> Raspberry Pi 5 ("ina-router") ──[Wi-Fi AP: "INA-Router"]──> Client Devices (Fedora, etc.)
+                                              • Uplink: wlan0                              • Subnet: 192.168.50.0/24
+                                              • AP: ap0 (virtual interface)                 • Gateway: 192.168.50.1
+                                              • NAT: nftables (masquerade)                  • DHCP: 192.168.50.10–100
 ```
 
-### 2. Access Point Profile Management (Safe & Dry-Run by Default)
-Inspect AP profile status, run pre-flight safety checks, and preview planned `nmcli` operations. Target interface is resolved dynamically via strict precedence (CLI `--interface` > `config/settings.yaml` > `NETWORK_INTERFACE` > unambiguous discovery), and active uplink interfaces are never selected automatically:
+For complete architectural details, service dependency graphs, and packet flows, see [docs/architecture.md](docs/architecture.md).
 
-```bash
-# Inspect AP profile status and pre-flight safety diagnostics
-python3 -m network.access_point status
+---
 
-# Inspect status targeting an explicit interface (e.g., secondary Wi-Fi dongle)
-python3 -m network.access_point status --interface wlan1
+## 2. Prerequisites
 
-# Preview AP profile creation (dry-run mode, safe)
-python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123
+### Network Infrastructure Host (Raspberry Pi 5)
+- **Hardware:** Raspberry Pi 5 (4GB or 8GB), 16GB+ microSD card, 27W USB-C power supply.
+- **Operating System:** Raspberry Pi OS Lite (64-bit, Debian Trixie base).
+- **Core Packages:** `hostapd`, `dnsmasq`, `nftables`, `iw`, `iperf3`.
 
-# Live creation (requires --no-dry-run)
-python3 -m network.access_point create --ssid INA-Test-Network --password YourSecretPassphrase123 --no-dry-run
-```
+### Development & Client Environment (Fedora / Linux Workstation)
+- **Operating System:** Linux (Fedora 38+, Ubuntu 22.04+, or Debian 12+).
+- **Python Runtime:** Python 3.11+ (Standard library only; zero external pip dependencies required for core inspection modules and unit tests).
 
-### 3. Run Unit Tests (No Root or External Dependencies Required)
+---
+
+## 3. Quick Start & Python Commands
+
+### Run Automated Unit Tests
+Execute the local test suite (tests mocked system commands, configuration schemas, and parsers without requiring root or live Pi hardware):
+
 ```bash
 python3 -m unittest discover tests/unit -v
 ```
 
----
+### Inspect Local Host Network & Connected Clients
+Inspect network interfaces, kernel routing tables, wireless driver AP capabilities, and active DHCP/ARP clients:
 
-## High-Level Architecture
+```bash
+# Print human-readable host discovery report
+python3 -m network.device_discovery
 
-The system consists of five primary layers:
+# Query connected client devices on the managed AP network (ARP + DHCP leases)
+python3 -m network.device_discovery --clients
 
-1. **Natural-Language Assistant (`assistant/`):** MCP client layer that translates operator intentions into validated tool invocations and structures conversational workflows.
-2. **FastMCP Server (`mcp_server/`):** High-performance MCP server exposing network management primitives via typed Pydantic schemas.
-3. **Policy and Authorization Engine (`policy/`):** Decoupled engine enforcing role-based access control (`roles.yaml`) and declarative network safety rules (`rules.yaml`).
-4. **Network Operations (`network/`):** Core network modules executing device discovery, access control, traffic shaping, and post-action verification on the managed network.
-5. **Configuration and Infrastructure (`config/`, `tests/`, `scripts/`, `docs/`):** Declarative settings, test suites, utilities, and architectural documentation.
+# Export complete discovery telemetry as structured JSON
+python3 -m network.device_discovery --json
+```
 
----
+### Inspect Router Infrastructure Status & Validate Config
+Inspect live system services (`hostapd`, `dnsmasq`, `ina-ap-interface`, `nftables`), IPv4 forwarding, and NAT rules, or validate an AP configuration:
 
-## Directory Structure & Responsibilities
+```bash
+# Inspect live router infrastructure state
+python3 -m network.access_point status
 
-```text
-intelligent-network-assistant-v2/
-├── assistant/               # Natural language assistant and MCP client interface
-│   ├── __init__.py
-│   ├── client.py            # MCP client connection and request dispatcher
-│   └── prompts.py           # System prompts and conversational templates
-├── mcp_server/              # FastMCP server and tool registry
-│   ├── __init__.py
-│   ├── server.py            # MCP server setup and lifecycle management
-│   ├── tools.py             # Tool implementations exposed to the assistant
-│   └── schemas.py           # Pydantic schemas for tool inputs and outputs
-├── policy/                  # Policy enforcement and RBAC engine
-│   ├── __init__.py
-│   ├── engine.py            # Policy evaluation logic
-│   ├── authorization.py     # Role-based authorization checks
-│   ├── rules.yaml           # Security and operational policy definitions (placeholder)
-│   └── roles.yaml           # User/agent roles and permissions (placeholder)
-├── network/                 # Network management and execution modules
-│   ├── device_discovery.py  # Host discovery & interface/routing inspection (Implemented)
-│   ├── access_point.py      # NetworkManager AP profile lifecycle & safety (Implemented)
-│   ├── access_control.py    # Firewall, MAC filtering, and quarantine controls
-│   ├── bandwidth.py         # Bandwidth limits and QoS traffic shaping
-│   └── verification.py      # Post-execution state verification
-├── config/                  # Configuration files
-│   └── settings.yaml        # System and environment settings (placeholder)
-├── tests/                   # Automated test suites
-│   ├── unit/                # Unit tests (test_device_discovery, test_access_point)
-│   ├── integration/         # End-to-end and MCP integration tests
-│   └── conftest.py          # Pytest fixtures and shared testing utilities
-├── scripts/                 # Operational and maintenance helper scripts
-├── docs/                    # Project documentation
-│   ├── architecture.md      # Detailed system architecture reference
-│   └── setup.md             # Development setup and environment guide
-├── logs/                    # Application and runtime logs (.gitkeep tracked)
-├── .env.example             # Example environment variable template
-├── .gitignore               # Git ignore rules for Python, virtualenvs, logs
-├── requirements.txt         # Project dependencies (comment-only skeleton)
-├── pyproject.toml           # Project metadata and pytest configuration
-└── README.md                # Project overview and directory map
+# Validate AP configuration parameters
+python3 -m network.access_point validate --ssid INA-Router --channel 11
 ```
 
 ---
 
-## Development & Setup
+## 4. Documentation Index
 
-For prerequisite details and environment configuration instructions, see [`docs/setup.md`](docs/setup.md) and [`docs/architecture.md`](docs/architecture.md).
+The `docs/` directory serves as the project's source of truth:
 
+- **[docs/architecture.md](docs/architecture.md):** Complete Pi-based system architecture, component ownership, topology, and packet traversal sequences.
+- **[docs/setup.md](docs/setup.md):** Step-by-step reproducible guide to bringing up the Raspberry Pi 5 network router from a fresh OS installation.
+- **[docs/network.md](docs/network.md):** Interface roles, IP address space (`192.168.50.0/24`), DHCP lease telemetry, and modular `nftables` NAT rules.
+- **[docs/testing.md](docs/testing.md):** Verifiable records of live test runs (reboot validation, local ping, external ping, `iperf3` 25.2 Mbps throughput benchmarks, and test limitations).
+- **[docs/troubleshooting.md](docs/troubleshooting.md):** Diagnostic commands and safe remediation steps for 11 verified failure scenarios.
+- **[docs/implementation_status.md](docs/implementation_status.md):** Objective classification matrix detailing implemented, planned, and purged components across the entire repository.
+
+---
+
+## 5. Important Project Notice & Scope
+
+> [!WARNING]
+> **End-to-End Control Pipeline Status:**
+> While the Raspberry Pi 5 network infrastructure (AP, DHCP, DNS, forwarding, NAT, and reboot persistence) is verified and operational, the **FastMCP server (`mcp_server/`)**, **Policy Engine (`policy/`)**, **AI Assistant client (`assistant/`)**, **access control blocking (`network/access_control.py`)**, and **bandwidth traffic shaping (`network/bandwidth.py`)** remain planned components.
+>
+> They exist as modular architecture skeletons and have **NOT** been integrated or tested end to end. Do not claim or assume that natural-language network mutation is operational.

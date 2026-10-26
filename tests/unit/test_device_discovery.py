@@ -15,8 +15,11 @@ from unittest.mock import patch
 from network.device_discovery import (
     APCandidate,
     CommandRunner,
+    DHCPLease,
+    DiscoveredClient,
     InterfaceInfo,
     IPAddressInfo,
+    NeighborEntry,
     NetworkReport,
     RouteInfo,
     TunnelCandidate,
@@ -27,7 +30,10 @@ from network.device_discovery import (
     _parse_ip_link_details,
     _parse_ip_routes_json,
     default_command_runner,
+    discover_clients,
     discover_network,
+    parse_dnsmasq_leases,
+    parse_ip_neighbors,
 )
 
 # ------------------------------------------------------------------------------
@@ -462,6 +468,104 @@ class TestDeviceDiscovery(unittest.TestCase):
         self.assertIn("[ INFERRED CANDIDATES & ANALYSIS ]", text)
         self.assertIn("[ WARNINGS & DIAGNOSTICS ]", text)
         self.assertIn("Sample diagnostic warning.", text)
+
+
+class TestClientDiscovery(unittest.TestCase):
+    """Unit tests for dnsmasq lease parsing, ARP neighbor inspection, and client discovery."""
+
+    def test_parse_dnsmasq_leases(self) -> None:
+        """Verify parsing of dnsmasq.leases format lines with valid and unassigned hostnames."""
+        sample_leases = (
+            "# dnsmasq leases file\n"
+            "1793087276 5e:22:f6:20:9a:e7 192.168.50.46 * 01:5e:22:f6:20:9a:e7\n"
+            "1793088000 00:11:22:33:44:55 192.168.50.20 laptop-test 01:00:11:22:33:44:55\n"
+            "invalid line with too few tokens\n"
+            "not_a_number 00:11:22:33:44:66 192.168.50.21 host\n"
+        )
+        leases = parse_dnsmasq_leases(sample_leases)
+        self.assertEqual(len(leases), 2)
+
+        # First lease: hostname '*' becomes None
+        self.assertEqual(leases[0].expiry_epoch, 1793087276)
+        self.assertEqual(leases[0].mac_address, "5e:22:f6:20:9a:e7")
+        self.assertEqual(leases[0].ip_address, "192.168.50.46")
+        self.assertIsNone(leases[0].hostname)
+        self.assertEqual(leases[0].client_id, "01:5e:22:f6:20:9a:e7")
+
+        # Second lease: named host
+        self.assertEqual(leases[1].expiry_epoch, 1793088000)
+        self.assertEqual(leases[1].hostname, "laptop-test")
+
+    def test_parse_ip_neighbors_text(self) -> None:
+        """Verify parsing of plain-text 'ip neigh' output."""
+        sample_output = (
+            "192.168.50.46 dev ap0 lladdr 5e:22:f6:20:9a:e7 REACHABLE\n"
+            "192.168.50.12 dev ap0 FAILED\n"
+            "192.168.1.1 dev wlan0 lladdr 00:aa:bb:cc:dd:ee REACHABLE\n"
+        )
+        # Filter for ap0
+        ap0_entries = parse_ip_neighbors(sample_output, target_interface="ap0")
+        self.assertEqual(len(ap0_entries), 2)
+        self.assertEqual(ap0_entries[0].ip_address, "192.168.50.46")
+        self.assertEqual(ap0_entries[0].mac_address, "5e:22:f6:20:9a:e7")
+        self.assertEqual(ap0_entries[0].state, "REACHABLE")
+
+        self.assertEqual(ap0_entries[1].ip_address, "192.168.50.12")
+        self.assertIsNone(ap0_entries[1].mac_address)
+        self.assertEqual(ap0_entries[1].state, "FAILED")
+
+        # No filter
+        all_entries = parse_ip_neighbors(sample_output)
+        self.assertEqual(len(all_entries), 3)
+
+    def test_parse_ip_neighbors_json(self) -> None:
+        """Verify parsing of 'ip -j neigh' JSON output."""
+        sample_json = json.dumps([
+            {
+                "dst": "192.168.50.46",
+                "dev": "ap0",
+                "lladdr": "5e:22:f6:20:9a:e7",
+                "state": ["REACHABLE"],
+            },
+            {
+                "dst": "192.168.1.1",
+                "dev": "wlan0",
+                "lladdr": "00:aa:bb:cc:dd:ee",
+                "state": ["REACHABLE"],
+            },
+        ])
+        entries = parse_ip_neighbors(sample_json, target_interface="ap0")
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0].ip_address, "192.168.50.46")
+        self.assertEqual(entries[0].state, "REACHABLE")
+
+    def test_discover_clients_correlation(self) -> None:
+        """Verify correlation between DHCP leases and kernel ARP neighbor table."""
+        sample_leases = "1793087276 5e:22:f6:20:9a:e7 192.168.50.46 * 01:5e:22:f6:20:9a:e7\n"
+        sample_neigh_text = "192.168.50.46 dev ap0 lladdr 5e:22:f6:20:9a:e7 REACHABLE\n"
+
+        def mock_runner(args: list[str], timeout: float = 5.0) -> tuple[int, str, str]:
+            return 0, sample_neigh_text, ""
+
+        with patch("os.path.exists", return_value=True), patch(
+            "builtins.open", unittest.mock.mock_open(read_data=sample_leases)
+        ):
+            clients = discover_clients(
+                ap_interface="ap0",
+                leases_file="/var/lib/misc/dnsmasq.leases",
+                runner=mock_runner,
+            )
+
+        self.assertEqual(len(clients), 1)
+        client = clients[0]
+        self.assertEqual(client.ip_address, "192.168.50.46")
+        self.assertEqual(client.mac_address, "5e:22:f6:20:9a:e7")
+        self.assertIsNone(client.hostname)
+        self.assertEqual(client.neighbor_state, "REACHABLE")
+        self.assertTrue(client.is_active)
+        self.assertEqual(client.source, "both")
+        # Randomized MAC detection (5e has locally administered bit set: 0x5e & 0x02 != 0)
+        self.assertTrue(any("randomized" in n.lower() for n in client.notes))
 
 
 if __name__ == "__main__":

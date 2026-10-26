@@ -1,117 +1,208 @@
-# INA v2 Architecture
+# INA v2 Architecture Reference
 
-## Overview
+## 1. Overview & System Purpose
 
-The **Intelligent Network Configuration Assistant v2 (INA v2)** is an automated network management system designed to manage a dedicated test network. Initially hosted on a Fedora laptop with planned migration to a Raspberry Pi, the system provides natural-language driven network configuration, monitoring, and policy enforcement via the Model Context Protocol (MCP).
+The **Intelligent Network Configuration Assistant v2 (INA v2)** is an automated network management and policy enforcement framework developed as a Computer Networks engineering project. The system provides natural-language driven network configuration, active telemetry, device discovery, and policy-governed traffic shaping over a dedicated test network.
 
-## Planned System Components
+In the verified system deployment, a **Raspberry Pi 5 (`ina-router`)** acts as the dedicated network infrastructure host, operating as a wireless access point and gateway router. Client devices—including a Fedora developer laptop—connect to the local network over Wi-Fi as standard wireless clients.
 
+```mermaid
+flowchart TD
+    subgraph WAN ["Upstream Internet & Cellular Network"]
+        Hotspot["Phone Hotspot ('1+ Four')\nGateway Uplink"]
+    end
+
+    subgraph RouterHost ["Raspberry Pi 5 Router Host ('ina-router')"]
+        direction TB
+        wlan0["Physical Wi-Fi Interface ('wlan0')\nSTA Mode (DHCP Client to Hotspot)"]
+
+        subgraph KernelRouting ["Linux Kernel Network Subsystem"]
+            Sysctl["IPv4 Forwarding\n(net.ipv4.ip_forward = 1)"]
+            NFT["nftables NAT Engine\n(table ip ina_nat / masquerade out wlan0)"]
+        end
+
+        subgraph SystemServices ["Host System Services"]
+            IFService["ina-ap-interface.service\n(Creates 'ap0', assigns 192.168.50.1/24)"]
+            Hostapd["hostapd Daemon\n(SSID: 'INA-Router', Ch 11, WPA2-PSK)"]
+            Dnsmasq["dnsmasq Daemon\n(DHCP: 192.168.50.10–100, DNS Server)"]
+        end
+
+        ap0["Virtual Wi-Fi Interface ('ap0')\nAP Mode (192.168.50.1/24)"]
+    end
+
+    subgraph Clients ["Local Wireless Clients (Subnet: 192.168.50.0/24)"]
+        Laptop["Fedora Development Laptop\n(192.168.50.46)"]
+        OtherDevices["Additional Wi-Fi Clients\n(Phones / Tablets / Test Nodes)"]
+    end
+
+    Hotspot <-->|Wi-Fi Uplink| wlan0
+    wlan0 <--> KernelRouting
+    KernelRouting <--> ap0
+    IFService -.->|creates & configures| ap0
+    Hostapd -.->|manages 802.11 AP on| ap0
+    Dnsmasq -.->|serves DHCP & DNS on| ap0
+    ap0 <-->|Wi-Fi 802.11 Link| Laptop
+    ap0 <-->|Wi-Fi 802.11 Link| OtherDevices
 ```
-┌────────────────────────────────────────────────────────┐
-│               Natural Language Assistant               │
-│               (Client & Prompt Engine)                 │
-└───────────────────────────┬────────────────────────────┘
-                            │ MCP Protocol
-┌───────────────────────────▼────────────────────────────┐
-│                    FastMCP Server                      │
-│            (Tool Registry & Schema Models)             │
-└──────┬────────────────────┬────────────────────┬───────┘
-       │                    │                    │
-┌──────▼──────┐      ┌──────▼──────┐      ┌──────▼──────┐
-│   Policy    │      │   Network   │      │ Verification│
-│ & Auth      │      │ Operations  │      │ & Telemetry │
-│ Engine      │      │  (NetOps)   │      │             │
-└─────────────┘      └─────────────┘      └─────────────┘
+
+---
+
+## 2. Network Topology & Interface Roles
+
+The tested physical and logical topology cleanly decouples the uplink internet path from the local managed access point:
+
+| Interface | Type | Role | IPv4 Configuration | Operational Responsibility |
+| :--- | :--- | :--- | :--- | :--- |
+| **`wlan0`** | Physical Wi-Fi (`brcmfmac`) | Internet Uplink (Station/STA mode) | Dynamic (Assigned via upstream DHCP) | Connects the Pi router to the upstream phone hotspot (`1+ Four`). Carries outbound internet traffic and default route. |
+| **`ap0`** | Virtual Wi-Fi (`__ap` mode on `wlan0`) | Managed Access Point | Static: `192.168.50.1/24` | Broadcasts SSID `INA-Router` on 2.4 GHz Channel 11. Terminates client associations and local subnet routing. |
+| **`eth0`** | Physical Gigabit Ethernet | Management / Standby | None assigned (Disconnected) | Reserved for optional out-of-band management or wired uplink. Not active in tested baseline. |
+| **`lo`** | Virtual Loopback | Local IPC | `127.0.0.1/8`, `::1/128` | Host internal communication and local daemon binding. |
+
+### Single-Radio Virtual Interface (`ap0`)
+
+The Raspberry Pi 5 uses a single on-board wireless chip (`Broadcom/Cypress`). To simultaneously connect to an upstream Wi-Fi hotspot (`wlan0`) while providing an independent wireless access point (`ap0`), the Linux kernel utilizes mac80211/cfg80211 virtual interface capabilities (`type __ap`).
+
+Both interfaces share the same underlying radio transceiver. Consequently, the virtual AP (`ap0`) operates on the physical radio channel constrained by the physical hardware.
+
+---
+
+## 3. Packet Data Flow & NAT Traversal
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor Client as Client Device (Fedora Laptop: 192.168.50.46)
+    participant AP0 as Pi AP Interface (ap0: 192.168.50.1)
+    participant Fwd as Pi Kernel Forwarding & nftables NAT
+    participant Uplink as Pi Uplink (wlan0)
+    participant Hotspot as Upstream Phone Hotspot & WAN
+
+    Client->>AP0: 802.11 Association & DHCP Request
+    AP0-->>Client: dnsmasq offers 192.168.50.46 (Gateway 192.168.50.1)
+    Note over Client,AP0: Local link established (0% loss, 34ms avg latency)
+
+    Client->>AP0: IPv4 Packet (Src: 192.168.50.46, Dst: 8.8.8.8)
+    AP0->>Fwd: Route lookup (Destination requires default route)
+    Note over Fwd: Kernel decrements TTL (net.ipv4.ip_forward = 1)
+    Fwd->>Fwd: nftables table ip ina_nat (postrouting hook)
+    Note over Fwd: SNAT Masquerade (Rewrite Src IP to wlan0's IP)
+    Fwd->>Uplink: Egress packet onto wlan0
+    Uplink->>Hotspot: 802.11 Frame to Phone Hotspot
+    Hotspot->>Hotspot: Cellular carrier NAT & WAN routing
+
+    Hotspot-->>Uplink: Return packet from Internet
+    Uplink->>Fwd: Ingress packet (conntrack matches NAT state)
+    Fwd->>Fwd: De-masquerade (Rewrite Dst IP to 192.168.50.46)
+    Fwd->>AP0: Forward packet out ap0
+    AP0-->>Client: Return packet delivered to client
 ```
 
-1. **Natural-Language Assistant and MCP Client (`assistant/`)**
-   - Processes user intent and interacts with network management tools through MCP.
-   - Formulates structured prompts, manages conversational context, and coordinates multi-step operational tasks.
+### Routing & Translation Components
 
-2. **FastMCP Server (`mcp_server/`)**
-   - Exposes safe, typed network administration tools adhering to the Model Context Protocol.
-   - Validates input arguments and response schemas using Pydantic models.
+1. **IPv4 Forwarding:** Enabled persistently via `/etc/sysctl.d/99-ina-router.conf` (`net.ipv4.ip_forward = 1`). Permits the Linux kernel to route packets between interfaces `ap0` and `wlan0`.
+2. **Stateful NAT (`nftables`):** Packets leaving interface `wlan0` sourced from `192.168.50.0/24` are masqueraded using `table ip ina_nat`. The conntrack subsystem maintains translation tables to route inbound replies back to the appropriate local client.
+3. **No Blanket Ruleset Flush:** The NAT table is isolated under `table ip ina_nat` and loaded without `flush ruleset`, preventing accidental erasure of unrelated system firewall policies.
 
-3. **Independent Policy and Authorization Engine (`policy/`)**
-   - Decouples policy verification and role-based access control from tool implementation.
-   - Evaluates actions against declaratively defined rules (`rules.yaml`) and role assignments (`roles.yaml`).
+---
 
-4. **Network Device Discovery and Access Control (`network/`)**
-   - `device_discovery.py`: Scans and maintains an active inventory of connected network clients.
-   - `access_control.py`: Enforces device admission policies, quarantine isolation, and firewall filtering rules.
-   - `bandwidth.py`: Configures Quality of Service (QoS), rate limits, and bandwidth shaping rules.
-   - `verification.py`: Confirms state changes post-action to ensure requested operations completed successfully.
+## 4. Host System Services & Startup Ordering
 
-5. **Configuration and Environment (`config/`, `.env.example`)**
-   - Centralized system settings (`settings.yaml`) and environmental configurations.
+The Raspberry Pi infrastructure relies on four core Linux daemons and systemd units:
 
-6. **Test Suite (`tests/`)**
-   - Segregated unit (`tests/unit/`) and integration (`tests/integration/`) test suites.
-   - Shared test fixtures configured in `tests/conftest.py`.
+```text
+[Boot]
+  │
+  ├──> wlan0 initialized by kernel / NetworkManager connects to Hotspot
+  │
+  ├──> ina-ap-interface.service (creates ap0, sets link UP, assigns 192.168.50.1/24)
+  │      │
+  │      ├──> hostapd.service (binds to ap0, starts 802.11 beaconing)
+  │      │
+  │      └──> dnsmasq.service (binds to ap0, starts DHCP/DNS listener)
+  │
+  └──> nftables.service (loads table ip ina_nat masquerade rule)
+```
 
-## Current State & Milestone Status
+1. **`ina-ap-interface.service`:** A systemd oneshot unit executing `/usr/local/sbin/ina-ap-interface.sh`. Creates virtual interface `ap0` on top of `wlan0`, sets link `UP`, and assigns static address `192.168.50.1/24`.
+2. **`hostapd`:** Access point authentication daemon. Reads `/etc/hostapd/hostapd.conf`, binds to `ap0`, advertises SSID `INA-Router` on channel 11, and handles WPA2 4-way handshakes.
+3. **`dnsmasq`:** Lightweight DHCP and DNS caching server. Reads `/etc/dnsmasq.d/ina-ap.conf`, listens on `ap0`, dynamically leases addresses from `192.168.50.10` to `192.168.50.100` (12-hour lease duration), and publishes gateway and DNS options.
+4. **`nftables`:** Modern Linux packet filtering framework. Reads `/etc/nftables.conf` and applies postrouting masquerading rules for client egress traffic.
 
-- **Milestone 1 — Read-Only Network Foundation (Implemented):**
-  - Host network discovery and reporting implemented in `network/device_discovery.py`.
-  - Collects interfaces, MAC addresses, operational states, IP assignments, routing tables, default routes, wireless driver AP capabilities, and tunnel classifications.
-  - Generates structured data models (`NetworkReport`, `InterfaceInfo`, `RouteInfo`, candidate models) and human-readable reports.
-  - Strictly read-only; no network mutations, hotspot configuration, or firewall modifications are performed.
-- **Milestone 2 — Safe Access Point Management (Implemented):**
-  - Access point profile lifecycle and safety management implemented in `network/access_point.py`.
-  - Configures WPA2-Personal security, explicit subnets, and NetworkManager's `shared` IPv4 mode.
-  - Implements pre-flight safety checks leveraging discovery data to prevent disconnecting active Wi-Fi uplinks.
-  - Enforces strict namespace isolation (`ina-*`), dry-run defaults, and explicit confirmation requirements.
-- **Pending Milestones:**
-  - FastMCP tool exposure and schemas (`mcp_server/`).
-  - Packet forwarding rules, firewall policies, and client quarantine (`network/access_control.py`).
-  - Policy and authorization engine (`policy/`).
-  - Bandwidth shaping and QoS controls (`network/bandwidth.py`).
-  - Assistant and conversational agent (`assistant/`).
+### Startup Race Resolution (Systemd Overrides)
 
-## Component Deep Dive: Network Discovery (`network/device_discovery.py`)
+Because `ap0` is created dynamically at boot, services attempting to bind to `ap0` prematurely (`hostapd` and `dnsmasq`) would fail if started before interface creation. Systemd drop-in override directories resolve this ordering:
 
-### Purpose & Architecture
-The network discovery module inspects the host network environment on Linux (Fedora) and provides the ground truth required for later milestones to configure and host a dedicated access point safely without disrupting the host's existing internet connectivity.
+- `/etc/systemd/system/hostapd.service.d/override.conf`: Establishes `BindsTo=sys-subsystem-net-devices-ap0.device` and `After=ina-ap-interface.service`.
+- `/etc/systemd/system/dnsmasq.service.d/override.conf`: Establishes `After=ina-ap-interface.service hostapd.service`.
 
-### Observed Facts vs. Inferred Candidates
-The discovery engine strictly separates direct observations from inferred recommendations:
-- **Observed Facts:**
-  - Network interfaces, operational states (`UP`, `DOWN`, `UNKNOWN`), device flags, and link types from `ip -j addr` and `ip -j -d link`.
-  - Physical MAC addresses and assigned IPv4/IPv6 addresses with CIDR prefixes and scopes.
-  - Active kernel routing tables, destinations, gateways, metrics, and protocols from `ip -j route` and `ip -j -6 route`.
-  - Wireless device mapping (`iw dev`) and physical adapter AP mode capability advertisement (`iw list`).
-  - Kernel tunnel flags and drivers (WireGuard, TUN/TAP, SIT, GRE, overlay networks).
-- **Inferred Candidates:**
-  - **Uplink Candidates:** Derived from default routes sorted by metric. The lowest-metric active route on an operational interface is inferred as the primary uplink.
-  - **Access Point (AP) Candidates:** Wireless interfaces whose drivers advertise `AP` mode. Interfaces currently acting as the primary uplink are flagged with warnings regarding the need for virtual interfaces (VIF) or secondary Wi-Fi adapters.
-  - **Tunnel Impact Analysis:** Tunnels with active routing table entries that may divert subnet traffic or alter routing policies.
+---
 
-### Error Handling & Degradation
-- All system commands are executed via argument lists without shell interpolation (`shell=False`) and guarded by execution timeouts.
-- Missing utilities (e.g. missing `iw`), permission restrictions, and corrupted output are trapped gracefully and returned as diagnostic warnings in `report.warnings`.
-- Unavailable information (such as AP capability when `iw` is unavailable) is explicitly recorded as `None` to distinguish it from a verified negative (`False`).
+## 5. Architectural Separation: Infrastructure vs. Application Layer
 
-## Component Deep Dive: Safe Access Point Management (`network/access_point.py`)
+A fundamental principle of the INA v2 design is the strict decoupling of the **Network Infrastructure Layer** from the **INA Application & Policy Layer**:
 
-### Purpose & Relationship to Discovery
-The access point management component builds upon `network/device_discovery.py` to manage a dedicated test network access point on Fedora using NetworkManager. Before executing any profile actions, the AP manager calls `discover_network()` to obtain real-time ground truth regarding active interfaces, kernel routes, and Wi-Fi capabilities.
+```text
+┌────────────────────────────────────────────────────────────────────────┐
+│                        INA APPLICATION LAYER                           │
+│                                                                        │
+│   ┌────────────────────────┐         ┌─────────────────────────────┐   │
+│   │   Assistant Client     │         │   Policy & Auth Engine      │   │
+│   │   (assistant/)         │         │   (policy/)                 │   │
+│   └───────────┬────────────┘         └──────────────┬──────────────┘   │
+│               │ MCP Protocol                        │ RBAC / Rules     │
+│   ┌───────────▼─────────────────────────────────────▼──────────────┐   │
+│   │                    FastMCP Server                              │   │
+│   │                    (mcp_server/)                               │   │
+│   └───────────────────────────┬────────────────────────────────────┘   │
+│                               │ Safe Python Primitives                 │
+│   ┌───────────────────────────▼────────────────────────────────────┐   │
+│   │                    Network Control Layer                       │   │
+│   │  • device_discovery.py (Host & Client ARP/DHCP Inspection)     │   │
+│   │  • access_point.py    (Configuration & Router State Inspector) │   │
+│   │  • access_control.py  (Firewall & Quarantine - Planned)        │   │
+│   │  • bandwidth.py       (Traffic Shaping / QoS - Planned)        │   │
+│   │  • verification.py    (Post-action State Checks - Planned)     │   │
+│   └───────────────────────────┬────────────────────────────────────┘   │
+└───────────────────────────────┼────────────────────────────────────────┘
+                                │ System Calls / SSH / Local IPC
+┌───────────────────────────────▼────────────────────────────────────────┐
+│                    NETWORK INFRASTRUCTURE LAYER                        │
+│                   (Raspberry Pi 5 / Debian Trixie)                     │
+│                                                                        │
+│   • Linux Kernel Subsystem (IPv4 Forwarding, nftables NAT, mac80211)   │
+│   • Physical & Virtual Interfaces (wlan0 uplink, ap0 access point)     │
+│   • System Daemons (hostapd, dnsmasq, systemd units)                  │
+│   • Hardware Platform (Broadcom Wi-Fi, Quad-Core ARM Cortex-A76)       │
+└────────────────────────────────────────────────────────────────────────┘
+```
 
-### Separation of Responsibilities & Lifecycle Stages
-To avoid assumptions regarding network state, the architecture clearly separates four operational stages:
-1. **Profile Creation (Implemented):** Creates or updates an inactive NetworkManager connection profile with explicit SSID, WPA2-PSK security, and `ipv4.method shared`. Autoconnect is set to `no` so the AP profile remains dormant until explicitly invoked.
-2. **AP Activation (Implemented with Safety Guards):** Invokes `nmcli connection up <profile_name>`. Guarded by pre-flight checks, confirmation requirements (`confirm=True`), and post-activation verification to ensure the interface genuinely transitions to the active state.
-3. **Client Connectivity & Addressing (Handled by NetworkManager):** NetworkManager's internal `dnsmasq` instance manages DHCP address allocation on the configured AP subnet once active.
-4. **Internet Forwarding & Firewall Enforcement (Pending Milestone 3+):** Forwarding between AP clients and upstream interfaces (e.g. Wi-Fi client, Ethernet, or Cloudflare WARP) and packet inspection/quarantine will be implemented in subsequent milestones.
+1. **Host Infrastructure Layer:** Configured and managed natively by the host operating system (Raspberry Pi OS / Debian). Runs independently of Python or MCP. If the assistant or MCP server is stopped or crashes, router functionality (AP, DHCP, NAT, forwarding) remains fully operational.
+2. **INA Application Layer:** Software suite implementing natural language processing, tool registry, authorization policies, telemetry, and automated network operations. Can run locally on the Raspberry Pi or remotely on an operator workstation over secure transport.
 
-### Safety Guards & Incompatible Uplink Detection
-- **Dynamic Interface Selection Precedence:**
-  1. Explicit CLI argument (`--interface <name>`).
-  2. Configuration file (`config/settings.yaml` -> `network.interface`).
-  3. Environment variable (`NETWORK_INTERFACE`).
-  4. Unambiguous network discovery (selects a dedicated non-uplink Wi-Fi interface only when exactly one candidate exists).
-  - If multiple wireless interfaces exist or the only available wireless interface is the active internet uplink, automatic selection is refused to prevent network disruption, and explicit configuration is required.
-- **Single-Radio Simultaneous Operation Constraints:** Most consumer Wi-Fi cards (such as standard Intel `iwlwifi` laptop chipsets) cannot safely maintain a client uplink connection (`STA`) and an access point (`AP`) simultaneously, or are constrained to a single frequency channel. Activating an AP on an active uplink interface will cause NetworkManager to drop the uplink Wi-Fi connection (e.g. `IITGN-SSO`).
-- **Active Uplink Conflict Detection:** The AP pre-flight check detects when the target interface carries an active default route or active client connection, and refuses activation by default. A dedicated secondary Wi-Fi adapter or Ethernet uplink is required for reliable simultaneous operation.
-- **Strict Namespace Isolation:** All INA profiles must be prefixed with `ina-` (e.g. `ina-ap`). The module strictly refuses to inspect, modify, deactivate, or delete any NetworkManager connection outside this namespace, safeguarding existing profiles (e.g. `IITGN-SSO`, `CloudflareWARP`, `Wired connection 1`).
-- **Credential Protection:** Passwords are never stored in plain text in logs or formatted command previews. String representations mask passphrases with `***`.
+---
 
+## 6. Component Ownership & Implementation Status
+
+| Component | Repository Path | Execution Host | Current Status | Notes |
+| :--- | :--- | :--- | :--- | :--- |
+| **Pi Access Point & Uplink** | `/etc/hostapd/`, `/etc/systemd/` | Raspberry Pi 5 | **Verified** | Reboot-persistent AP (`ap0`) and uplink (`wlan0`) tested. |
+| **DHCP & DNS Services** | `/etc/dnsmasq.d/` | Raspberry Pi 5 | **Verified** | Leases `192.168.50.10–100` dynamically with 12h expiry. |
+| **Routing & NAT Engine** | `/etc/nftables.conf`, sysctl | Raspberry Pi 5 | **Verified** | Forwarding active (`ip_forward=1`), NAT masquerade active. |
+| **Host Network Discovery** | `network/device_discovery.py` | Pi or Dev Workstation | **Verified** | Inspects interfaces, routes, wireless driver capabilities. |
+| **Client Device Discovery** | `network/device_discovery.py` | Raspberry Pi 5 | **Verified** | Parses `dnsmasq.leases` and `ip neigh` table. |
+| **Router Status Inspector** | `network/access_point.py` | Raspberry Pi 5 | **Verified** | Validates config and inspects live systemd/nftables state. |
+| **Access Control & Quarantine** | `network/access_control.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; live blocking not tested. |
+| **Bandwidth Management / QoS** | `network/bandwidth.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; live traffic shaping not tested. |
+| **Post-Action Verification** | `network/verification.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; verification hooks pending. |
+| **FastMCP Server** | `mcp_server/` | Pi or Dev Workstation | **Planned** | Server skeleton created; tool schemas pending. |
+| **Policy Engine & RBAC** | `policy/` | Pi or Dev Workstation | **Planned** | Declarative rules and role definitions pending. |
+| **AI Assistant Client** | `assistant/` | Operator Workstation | **Planned** | Conversational prompt and client pipeline pending. |
+
+---
+
+## 7. Known Architectural Limitations
+
+1. **Shared Wi-Fi Radio Channel:** Because `wlan0` and `ap0` operate on the same physical radio, simultaneous AP and STA operation must share radio time. Sustained traffic on both interfaces simultaneously impacts wireless throughput and latency.
+2. **Cellular Uplink Variability:** The upstream internet uplink is provided by a mobile phone hotspot. Packet loss, variable latency, and cellular throttling are external factors beyond the router's local control.
+3. **Client MAC Randomization:** Modern wireless clients generate randomized MAC addresses per SSID by default, which can result in multiple lease records for a single physical device across reconnects.
+4. **Unassigned DHCP Hostnames:** Clients that do not transmit Option 12 in their DHCP requests are recorded with a hostname of `*` in `dnsmasq.leases`, requiring IP or MAC based identification.
