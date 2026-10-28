@@ -1,0 +1,9 @@
+id,request,got,asked,question
+C1-no-device-no-rate,slow it down,clarify,True,"Which device, and what speed in Mbps?"
+C2-limit-no-rate,limit guest-phone,clarify,True,What speed in Mbps for guest-phone?
+C3-limit-no-device,cap the speed to 5 mbps,clarify,True,Which device should I limit?
+C4-no-action,the wifi feels slow today,clarify,True,"Which device, and what speed in Mbps?"
+C5-block-no-device,block it,clarify,True,Which device should I block?
+C6-empty,,clarify,True,Could you say what you'd like to do?
+C7-vague,do something about the hog,clarify,True,"I didn't catch an action. Try: 'list devices', 'limit lab-laptop-3 to 5 Mbps', 'block lab-laptop-3', or 'restore lab-laptop-3'."
+C8-restore-no-device,unblock,clarify,True,Which device should I restore?

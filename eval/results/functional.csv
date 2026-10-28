@@ -1,0 +1,11 @@
+id,role,request,expected,got,pass,reply
+F1-list,operator,list the devices on the network,success,success,True,Devices on the network: /   - pi-gateway [protected] /   - admin-laptop [protected] /   - probe-laptop [protected] /   - lab-laptop-3 [staff] /   - guest-phone [guest]
+F2-limit-guest,operator,limit guest-phone to 5 mbps,success,success,True,Done. Limited guest-phone to 5 Mbit/s. Verified: 5 Mbit/s.
+F3-block-guest,operator,block guest-phone,success,success,True,Done. Blocked guest-phone. Verified: 100% packet loss.
+F4-restore-guest,operator,restore guest-phone,success,success,True,"Done. Restored guest-phone. Verified: reachable, no limit."
+F5-admin-limit-staff,admin,limit lab-laptop-3 to 10 mbps,success,success,True,Done. Limited lab-laptop-3 to 10 Mbit/s. Verified: 10 Mbit/s.
+F6-operator-staff-denied,operator,block lab-laptop-3,denied,denied,True,I can't do that: Role 'operator' may not act on staff devices.
+F7-protected-denied,operator,block admin-laptop,denied,denied,True,I can't do that: 'admin-laptop' is a protected device and cannot be changed.
+F8-rate-too-high,operator,limit guest-phone to 50 mbps,denied,denied,True,I can't do that: 50.0 Mbit/s is outside the allowed range (2-20 Mbit/s) for role 'operator'.
+F9-unknown-device,operator,block printer-x9,denied,denied,True,I can't do that: 'printer-x9' is not a recognized device.
+F10-admin-block-staff,admin,block lab-laptop-3,success,success,True,Done. Blocked lab-laptop-3. Verified: 100% packet loss.
