@@ -60,10 +60,12 @@ class MockNetworkState:
 
     blocked: set = field(default_factory=set)        # set of MACs
     limits: Dict[str, float] = field(default_factory=dict)  # MAC -> mbit
+    banned: set = field(default_factory=set)         # set of MACs
 
     def reset(self) -> None:
         self.blocked.clear()
         self.limits.clear()
+        self.banned.clear()
 
 
 # Default role tokens -> role. In the real system these are hashed on the Pi.
@@ -157,10 +159,16 @@ class MockTransport(Transport):
 
         if request.tool == ToolName.LIMIT_BANDWIDTH.value:
             return self._limit(request, role, device)
-        if request.tool == ToolName.BLOCK_DEVICE.value:
+        if request.tool in (ToolName.BLOCK_DEVICE.value, ToolName.BLOCK_CLIENT.value):
             return self._block(request, device)
         if request.tool == ToolName.RESTORE_DEVICE.value:
             return self._restore(request, device)
+        if request.tool in (ToolName.KICK_CLIENT.value, "kick_client"):
+            return self._kick(request, device)
+        if request.tool in (ToolName.BAN_CLIENT.value, "ban_client"):
+            return self._ban(request, role, device)
+        if request.tool in (ToolName.UNBAN_CLIENT.value, "unban_client"):
+            return self._unban(request, role, device)
 
         return self._deny(request, f"Unknown tool '{request.tool}'.", "R-unknown-tool")
 
@@ -172,12 +180,93 @@ class MockTransport(Transport):
                 "class": d.cls,
                 "blocked": d.mac in self.state.blocked,
                 "limit_mbit": self.state.limits.get(d.mac),
+                "banned": d.mac in self.state.banned,
             })
         return ToolResult(
             status="success", tool=call.tool, request_id=call.request_id,
             decision=Decision("ALLOW", "Listing is permitted for all roles.", "R-list"),
             detail=f"{len(rows)} device(s) on the network.",
             data={"devices": rows},
+        )
+
+    def _kick(self, call: ToolCall, device: MockDevice) -> ToolResult:
+        verification = Verification(
+            passed=True,
+            expected="station deauthenticated",
+            measured="station deauthenticated",
+            checks=[{"name": "deauthenticate", "expected": "OK", "measured": "OK"}],
+        )
+        return ToolResult(
+            status="success",
+            tool=call.tool,
+            request_id=call.request_id,
+            device=device.name,
+            decision=Decision("ALLOW", "Kick permitted."),
+            verification=verification,
+            detail=f"Disconnected {device.name}.",
+            data={"kicked": True, "mac": device.mac},
+        )
+
+    def _ban(self, call: ToolCall, role: str, device: MockDevice) -> ToolResult:
+        args = call.arguments or {}
+        minutes = args.get("minutes")
+        if minutes is None and "duration_minutes" in args:
+            minutes = args.get("duration_minutes")
+        confirm = bool(args.get("confirm"))
+
+        if role == "operator":
+            if minutes is None:
+                return self._deny(call, "Role 'operator' must give duration_minutes (max 60).", "R-ban-duration")
+            if minutes > 60:
+                return self._deny(call, "Role 'operator' cannot ban for more than 60 minutes.", "R-ban-duration")
+
+        dur = f"{minutes} min" if minutes else "permanently"
+        if not confirm:
+            return ToolResult(
+                status="preview",
+                tool=call.tool,
+                request_id=call.request_id,
+                device=device.name,
+                decision=Decision("ALLOW", "Ban preview."),
+                detail=f"PREVIEW: would deny {device.mac} for {dur} and disconnect it now.",
+                data={"requires_confirmation": True, "preview": True, "mac": device.mac},
+            )
+
+        self.state.banned.add(device.mac)
+        verification = Verification(
+            passed=True,
+            expected="station denied",
+            measured="station denied",
+            checks=[{"name": "deny_acl", "expected": device.mac, "measured": device.mac}],
+        )
+        return ToolResult(
+            status="success",
+            tool=call.tool,
+            request_id=call.request_id,
+            device=device.name,
+            decision=Decision("ALLOW", "Ban applied."),
+            verification=verification,
+            detail=f"Banned {device.name} ({device.mac}) for {dur}.",
+            data={"banned": True, "mac": device.mac},
+        )
+
+    def _unban(self, call: ToolCall, role: str, device: MockDevice) -> ToolResult:
+        self.state.banned.discard(device.mac)
+        verification = Verification(
+            passed=True,
+            expected="station allowed",
+            measured="station allowed",
+            checks=[{"name": "deny_acl", "expected": "absent", "measured": "absent"}],
+        )
+        return ToolResult(
+            status="success",
+            tool=call.tool,
+            request_id=call.request_id,
+            device=device.name,
+            decision=Decision("ALLOW", "Unban permitted."),
+            verification=verification,
+            detail=f"Unbanned {device.name}.",
+            data={"unbanned": True, "mac": device.mac},
         )
 
     def _limit(self, call: ToolCall, role: str, device: MockDevice) -> ToolResult:
@@ -270,3 +359,220 @@ class HttpTransport(Transport):
                                     token="operator-token"))
         rows = result.data.get("devices", [])
         return [r.get("name") for r in rows if r.get("name")]
+
+
+# ---------------------------------------------------------------------------
+# Direct Service Layer Transport
+# ---------------------------------------------------------------------------
+
+class ServiceTransport(Transport):
+    """Direct transport connecting the assistant to the authoritative NetworkService.
+
+    Translates assistant ToolCall invocations into typed NetworkService operations,
+    enforcing real policy evaluation, single-writer locking, kernel mutations,
+    read-back verification, and SHA-256 audit logging.
+    """
+
+    def __init__(self, service=None) -> None:
+        if service is None:
+            from inav2.network.service import default_service
+            self.service = default_service
+        else:
+            self.service = service
+
+    def call(self, request: ToolCall) -> ToolResult:
+        role = "operator"
+        if request.token:
+            if "admin" in request.token.lower():
+                role = "admin"
+            elif "viewer" in request.token.lower():
+                role = "viewer"
+
+        args = request.arguments or {}
+        device = args.get("device") or args.get("client") or ""
+        target = args.get("target") or "all"
+
+        try:
+            if request.tool in (ToolName.BLOCK_CLIENT.value, ToolName.BLOCK_DEVICE.value):
+                res = self.service.block(client=device, target=target, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Block action permitted by policy."),
+                    verification=Verification(passed=res.verified, measured="Kernel block set confirmed"),
+                    detail=res.message or f"Blocked {device} to {target}.",
+                )
+
+            elif request.tool == ToolName.UNBLOCK_CLIENT.value:
+                res = self.service.unblock(client=device, target=target, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Unblock action permitted by policy."),
+                    verification=Verification(passed=res.verified, measured="Rule removed from kernel set"),
+                    detail=res.message or f"Unblocked {device} to {target}.",
+                )
+
+            elif request.tool == ToolName.LIMIT_BANDWIDTH.value:
+                mbit = args.get("mbit")
+                down = args.get("download_kbit") or (int(mbit * 1000) if mbit else 5000)
+                up = args.get("upload_kbit") or down
+                res = self.service.limit(client=device, download_kbit=down, upload_kbit=up, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Bandwidth shaping permitted by policy."),
+                    verification=Verification(passed=res.verified, measured=f"{down}k down / {up}k up confirmed"),
+                    detail=res.message or f"Limited {device} to {down}k/{up}k.",
+                )
+
+            elif request.tool == ToolName.REMOVE_BANDWIDTH_LIMIT.value:
+                res = self.service.remove_limit(client=device, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Bandwidth unlimit permitted by policy."),
+                    verification=Verification(passed=res.verified, measured="Classes removed from ap0 and ifb-ap0"),
+                    detail=res.message or f"Removed bandwidth limits for {device}.",
+                )
+
+            elif request.tool == ToolName.RESTORE_DEVICE.value:
+                self.service.unblock(client=device, target="all", role=role)
+                self.service.remove_limit(client=device, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Restore permitted by policy."),
+                    verification=Verification(passed=True, measured="Unblocked and unshaped"),
+                    detail=f"Restored {device}: unblocked and removed rate limits.",
+                )
+
+            elif request.tool in (ToolName.GET_STATUS.value, ToolName.LIST_DEVICES.value):
+                res = self.service.status(client=device or None, role=role)
+                rows = [
+                    {
+                        "name": c.client,
+                        "ip": c.ip,
+                        "associated": c.associated,
+                        "blocked": c.blocked_targets,
+                        "download_kbit": c.download_kbit,
+                        "upload_kbit": c.upload_kbit,
+                        "banned": c.banned,
+                    }
+                    for c in res.clients
+                ]
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device or None,
+                    decision=Decision("ALLOW", "Status query permitted."),
+                    verification=Verification(passed=True, measured="Read from system state"),
+                    data={"devices": rows},
+                    detail=f"Found {len(rows)} devices.",
+                )
+
+            elif request.tool in (ToolName.KICK_CLIENT.value, "kick_client"):
+                res = self.service.kick(client=device, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Kick action permitted by policy."),
+                    verification=Verification(passed=res.verified, measured="Deauthentication accepted"),
+                    detail=res.message or f"Disconnected {device}.",
+                    data={"mac": res.mac, "kicked": res.kicked, "reconnected": res.reconnected},
+                )
+
+            elif request.tool in (ToolName.BAN_CLIENT.value, "ban_client"):
+                minutes = args.get("minutes")
+                if minutes is None and "duration_minutes" in args:
+                    minutes = args.get("duration_minutes")
+                reason = args.get("reason")
+                confirm = bool(args.get("confirm"))
+                res = self.service.ban(
+                    client=device,
+                    duration_minutes=minutes,
+                    reason=reason,
+                    confirm=confirm,
+                    role=role,
+                )
+                status = "preview" if res.preview else "success"
+                return ToolResult(
+                    status=status,
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Ban preview generated." if res.preview else "Ban applied."),
+                    verification=Verification(passed=res.verified, measured="Deny ACL confirmed" if res.verified else "None"),
+                    detail=res.message,
+                    data={
+                        "preview": res.preview,
+                        "requires_confirmation": res.requires_confirmation,
+                        "banned": res.banned,
+                        "mac": res.mac,
+                        "expires_at": res.expires_at,
+                    },
+                )
+
+            elif request.tool in (ToolName.UNBAN_CLIENT.value, "unban_client"):
+                res = self.service.unban(client=device, role=role)
+                return ToolResult(
+                    status="success",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device,
+                    decision=Decision("ALLOW", "Unban action permitted by policy."),
+                    verification=Verification(passed=res.verified, measured="Deny ACL removal confirmed"),
+                    detail=res.message or f"Unbanned {device}.",
+                    data={"mac": res.mac, "unbanned": res.unbanned},
+                )
+
+            else:
+                return ToolResult(
+                    status="error",
+                    tool=request.tool,
+                    request_id=request.request_id,
+                    device=device or None,
+                    error=f"Unknown tool '{request.tool}'.",
+                )
+
+        except Exception as err:
+            from inav2.network.service import PolicyDeniedError
+            is_denied = (
+                isinstance(err, PolicyDeniedError)
+                or "denied" in str(err).lower()
+                or "protected" in str(err).lower()
+                or "refusing to" in str(err).lower()
+                or "cannot" in str(err).lower()
+                or "unknown client" in str(err).lower()
+            )
+            status = "denied" if is_denied else "failure"
+            return ToolResult(
+                status=status,
+                tool=request.tool,
+                request_id=request.request_id,
+                device=device or None,
+                decision=Decision("DENY", str(err)),
+                verification=Verification(passed=False, expected="Action permitted by policy", measured=str(err)),
+                detail=str(err),
+            )
+
+    def device_names(self) -> List[str]:
+        """Fetch known client device names from active status."""
+        try:
+            status_res = self.service.status(role="viewer")
+            return [c.client for c in status_res.clients]
+        except Exception:
+            return []

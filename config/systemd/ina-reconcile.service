@@ -1,0 +1,12 @@
+[Unit]
+Description=INA: re-apply desired blocks and bandwidth limits
+After=nftables.service ina-ap-interface.service hostapd.service
+Requires=ina-ap-interface.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ina-netctl reconcile
+
+[Install]
+WantedBy=multi-user.target
+

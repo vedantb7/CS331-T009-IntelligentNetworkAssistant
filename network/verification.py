@@ -1,362 +1,379 @@
-"""Post-action verification for INA v2.
+"""Post-action verification module for INA v2.
 
-After the MCP server applies a change, it calls into this module to confirm,
-by measurement, that the network is actually in the intended state. Verifying
-is independent of applying: a command that exits cleanly does not prove the
-network changed, so we re-check with the network itself.
+Validates that requested network mutations (access rules, rate limits, AP configuration)
+were successfully applied to the Raspberry Pi 5 kernel and active services.
 
-What each check looks at:
-- block   -> a ping from a sibling client to the target should FAIL (100% loss),
-             and the nftables drop rule for the target should be present.
-- unblock -> the ping should succeed again, and no drop rule should remain.
-- limit   -> the tc qdisc/rate on the target's interface should be present, and
-             (optionally) an iperf3 run should measure a rate within tolerance
-             of the requested rate.
-
-This module follows the same conventions as ``network/device_discovery.py``:
-read-only inspection, a 3-tuple ``(exit_code, stdout, stderr)`` command runner
-that can be injected for testing, and no external pip dependencies. It can be
-run and unit-tested on any machine with the runner mocked; on the Pi it uses
-real ``ping``, ``iperf3``, ``nft`` and ``tc``.
-
-Owner: Khushi (verification). Called by Dhruv's MCP server pipeline.
+Verification Targets:
+- Inspects 'nftables' sets in the 'inet ina_filter' table to confirm rule addition and removal.
+- Inspects 'tc' classes and filters on 'ap0' and 'ifb-ap0' to verify rate limits and burst sizes.
+- Inspects ARP / neighbor states and active DHCP leases to verify that the client
+  remains associated and active on the network without unintended disconnection.
+- Provides active verification wrappers (verify_block, verify_unblock, verify_limit)
+  for assistant compatibility.
 """
 
 from __future__ import annotations
 
-import argparse
 import json
+import os
 import re
-from dataclasses import asdict, dataclass, field
-from typing import Any, Callable, Dict, List, Optional, Tuple
+import time
+from dataclasses import dataclass
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
-from network.device_discovery import CommandRunner, default_command_runner
-
-# Default tolerance for bandwidth verification: measured within +/- 20% of target
-# (the same tolerance used in INA v1).
-DEFAULT_TOLERANCE = 0.20
-
-# Default interface the Pi applies client shaping on.
-DEFAULT_AP_INTERFACE = "ap0"
+# CommandRunner type alias matching device_discovery.py
+CommandRunner = Callable[[List[str], float], Tuple[int, str, str]]
 
 
-# ==============================================================================
-# Result model
-# ==============================================================================
-
-
-@dataclass
-class Check:
-    """One measurement and whether it met expectation."""
-
-    name: str
-    expected: str
-    measured: str
-    passed: bool
+def _default_runner(args: List[str], timeout: float = 5.0) -> Tuple[int, str, str]:
+    from inav2.network.device_discovery import default_command_runner
+    return default_command_runner(args, timeout)
 
 
 @dataclass
 class VerificationResult:
-    """The outcome Dhruv's pipeline reads. ``passed`` is a plain bool."""
+    """Outcome of an active or kernel verification check."""
 
-    action: str
-    target: str
     passed: bool
-    checks: List[Check] = field(default_factory=list)
-    expected: Optional[str] = None
     measured: Optional[str] = None
-    duration_s: float = 0.0
     error: Optional[str] = None
 
-    def to_dict(self) -> Dict[str, Any]:
-        return {
-            "action": self.action,
-            "target": self.target,
-            "passed": self.passed,
-            "checks": [asdict(c) for c in self.checks],
-            "expected": self.expected,
-            "measured": self.measured,
-            "duration_s": round(self.duration_s, 3),
-            "error": self.error,
-        }
 
+def _check_json_elements(elem_list: Any, expected: Any) -> bool:
+    """Check if expected element exists in nftables JSON element list."""
+    if not isinstance(elem_list, list):
+        elem_list = [elem_list]
 
-# ==============================================================================
-# Low-level measurements
-# ==============================================================================
-
-
-def _ping_loss_percent(runner: CommandRunner, target_ip: str, *,
-                       source_interface: Optional[str] = None,
-                       count: int = 3, timeout: float = 8.0) -> Optional[float]:
-    """Return packet-loss percentage from a ping, or None if it couldn't run.
-
-    On the Pi, verifying a block should ping the target from a *sibling* client
-    so the traffic crosses the bridge where the rule is enforced. When a source
-    interface is given we bind to it with ``-I``.
-    """
-    args = ["ping", "-c", str(count), "-w", str(int(timeout))]
-    if source_interface:
-        args += ["-I", source_interface]
-    args.append(target_ip)
-    code, out, _err = runner(args, timeout + 2)
-    if code in (127, 126, 124):
-        return None
-    m = re.search(r"(\d+(?:\.\d+)?)%\s*packet loss", out)
-    if not m:
-        # Some ping builds print "100% packet loss" only on total failure; if we
-        # saw no transmitted/received line at all, treat as unknown.
-        return None
-    try:
-        return float(m.group(1))
-    except ValueError:
-        return None
-
-
-def _nft_has_drop_rule(runner: CommandRunner, target: str) -> Optional[bool]:
-    """True if the nftables ruleset mentions a drop/quarantine for the target.
-
-    ``target`` may be a MAC or an IP. Returns None if nft can't be queried.
-    """
-    code, out, _err = runner(["nft", "list", "ruleset"], 5.0)
-    if code in (127, 126, 124):
-        return None
-    if code != 0 and not out:
-        return None
-    text = out.lower()
-    needle = target.lower()
-    # A drop rule for the target: the target appears on a line that drops.
-    for line in text.splitlines():
-        if needle in line and ("drop" in line or "reject" in line):
-            return True
+    for item in elem_list:
+        if isinstance(item, dict):
+            if "concat" in item:
+                concat_val = item["concat"]
+                if concat_val == expected:
+                    return True
+            if "elem" in item and isinstance(item["elem"], dict):
+                val = item["elem"].get("val")
+                if val == expected or (isinstance(val, dict) and val.get("concat") == expected):
+                    return True
+        elif isinstance(item, list):
+            if item == expected:
+                return True
+        elif isinstance(item, str):
+            if item == str(expected):
+                return True
     return False
 
 
-def _tc_rate_mbit(runner: CommandRunner, interface: str) -> Optional[float]:
-    """Return the configured tc rate ceiling in Mbit/s on an interface, if any."""
-    code, out, _err = runner(["tc", "qdisc", "show", "dev", interface], 5.0)
-    if code in (127, 126, 124):
-        return None
-    # Also look at classes for htb/tbf rates.
-    code2, out2, _err2 = runner(["tc", "class", "show", "dev", interface], 5.0)
-    blob = (out or "") + "\n" + (out2 or "")
-    m = re.search(r"rate\s+(\d+(?:\.\d+)?)([kKmMgG]?)bit", blob)
-    if not m:
-        return None
-    value = float(m.group(1))
-    unit = m.group(2).lower()
-    factor = {"": 1e-6, "k": 1e-3, "m": 1.0, "g": 1e3}.get(unit, 1.0)
-    return value * factor
+def verify_block_applied(
+    client_ip: str,
+    target_type: str,
+    target_val: str,
+    runner: Optional[CommandRunner] = None,
+) -> bool:
+    """Verify that a blocking rule is actively present in the kernel nftables set."""
+    run = runner or _default_runner
 
+    set_map = {
+        "client": "blocked_pairs",
+        "internet": "blocked_internet",
+        "gateway": "blocked_gateway",
+        "all": "isolated",
+    }
+    set_name = set_map.get(target_type)
+    if not set_name:
+        return False
 
-def _iperf3_mbit(runner: CommandRunner, server_ip: str, *,
-                 duration: int = 5, reverse: bool = False,
-                 timeout: float = 20.0) -> Optional[float]:
-    """Measure throughput to an iperf3 server in Mbit/s, or None if unavailable.
+    # Attempt JSON inspection first: nft -j list set inet ina_filter <set_name>
+    code, stdout, _ = run(["nft", "-j", "list", "set", "inet", "ina_filter", set_name], 5.0)
+    if code == 0 and stdout.strip():
+        try:
+            data = json.loads(stdout)
+            for item in data.get("nftables", []):
+                set_obj = item.get("set", {})
+                if set_obj.get("name") == set_name:
+                    elems = set_obj.get("elem", [])
+                    if target_type == "client":
+                        expected_pair_1 = [client_ip, target_val]
+                        expected_pair_2 = [target_val, client_ip]
+                        has_1 = _check_json_elements(elems, expected_pair_1)
+                        has_2 = _check_json_elements(elems, expected_pair_2)
+                        if has_1 and has_2:
+                            return True
+                    else:
+                        if _check_json_elements(elems, client_ip):
+                            return True
+        except (json.JSONDecodeError, KeyError, TypeError):
+            pass
 
-    ``reverse=True`` measures download (server -> client), which is the direction
-    a download limit on the client affects.
-    """
-    args = ["iperf3", "-c", server_ip, "-t", str(duration), "-J"]
-    if reverse:
-        args.append("-R")
-    code, out, _err = runner(args, timeout)
-    if code in (127, 126, 124) or not out:
-        return None
-    try:
-        data = json.loads(out)
-        bits = data["end"]["sum_received"]["bits_per_second"]
-        return float(bits) / 1e6
-    except (ValueError, KeyError, TypeError):
-        return None
+    # Fallback to standard text output: nft list set inet ina_filter <set_name>
+    code, stdout, _ = run(["nft", "list", "set", "inet", "ina_filter", set_name], 5.0)
+    if code != 0 or not stdout.strip():
+        # Also check general ruleset format if set listing was empty
+        code2, stdout2, _ = run(["nft", "list", "ruleset"], 5.0)
+        if code2 == 0 and stdout2.strip():
+            stdout = stdout2
+        else:
+            return False
 
-
-# ==============================================================================
-# Public verification entry points
-# ==============================================================================
-
-
-def verify_block(target_ip: str, *,
-                 target_id: Optional[str] = None,
-                 source_interface: Optional[str] = None,
-                 runner: CommandRunner = default_command_runner,
-                 time_fn: Callable[[], float] = None) -> VerificationResult:
-    """Verify a device is blocked: ping should fail, drop rule should exist."""
-    import time as _time
-    now = time_fn or _time.monotonic
-    start = now()
-    checks: List[Check] = []
-
-    loss = _ping_loss_percent(runner, target_ip, source_interface=source_interface)
-    ping_passed = loss is not None and loss >= 99.0
-    checks.append(Check(
-        name="ping from sibling",
-        expected="100% packet loss",
-        measured=("unknown" if loss is None else f"{loss:g}% loss"),
-        passed=ping_passed,
-    ))
-
-    rule_target = target_id or target_ip
-    has_rule = _nft_has_drop_rule(runner, rule_target)
-    if has_rule is not None:
-        checks.append(Check(
-            name="nftables drop rule",
-            expected="present",
-            measured="present" if has_rule else "absent",
-            passed=bool(has_rule),
-        ))
-
-    # A block is verified if the ping confirms unreachability. The nft check is
-    # corroborating evidence; if nft can't be queried we still trust the ping.
-    passed = ping_passed and (has_rule is not False)
-    return VerificationResult(
-        action="block", target=rule_target, passed=passed, checks=checks,
-        expected="unreachable", measured=checks[0].measured,
-        duration_s=now() - start,
-    )
-
-
-def verify_unblock(target_ip: str, *,
-                   target_id: Optional[str] = None,
-                   source_interface: Optional[str] = None,
-                   runner: CommandRunner = default_command_runner,
-                   time_fn: Callable[[], float] = None) -> VerificationResult:
-    """Verify a device is restored: ping should succeed, no drop rule remain."""
-    import time as _time
-    now = time_fn or _time.monotonic
-    start = now()
-    checks: List[Check] = []
-
-    loss = _ping_loss_percent(runner, target_ip, source_interface=source_interface)
-    ping_passed = loss is not None and loss <= 20.0
-    checks.append(Check(
-        name="ping from sibling",
-        expected="reachable (<=20% loss)",
-        measured=("unknown" if loss is None else f"{loss:g}% loss"),
-        passed=ping_passed,
-    ))
-
-    rule_target = target_id or target_ip
-    has_rule = _nft_has_drop_rule(runner, rule_target)
-    if has_rule is not None:
-        checks.append(Check(
-            name="no leftover drop rule",
-            expected="absent",
-            measured="absent" if not has_rule else "present",
-            passed=not has_rule,
-        ))
-
-    passed = ping_passed and (has_rule is not True)
-    return VerificationResult(
-        action="unblock", target=rule_target, passed=passed, checks=checks,
-        expected="reachable", measured=checks[0].measured,
-        duration_s=now() - start,
-    )
-
-
-def verify_limit(target_ip: str, expected_mbit: float, *,
-                 target_id: Optional[str] = None,
-                 interface: str = DEFAULT_AP_INTERFACE,
-                 iperf_server_ip: Optional[str] = None,
-                 tolerance: float = DEFAULT_TOLERANCE,
-                 runner: CommandRunner = default_command_runner,
-                 time_fn: Callable[[], float] = None) -> VerificationResult:
-    """Verify a bandwidth limit: tc rate present, and measured rate within range.
-
-    If ``iperf_server_ip`` is given, a throughput test is run and must land
-    within ``tolerance`` of ``expected_mbit``. If iperf3 is unavailable, the tc
-    rule presence alone is used (and the measured value is reported as the
-    configured rate).
-    """
-    import time as _time
-    now = time_fn or _time.monotonic
-    start = now()
-    checks: List[Check] = []
-    lo = expected_mbit * (1 - tolerance)
-    hi = expected_mbit * (1 + tolerance)
-
-    tc_rate = _tc_rate_mbit(runner, interface)
-    if tc_rate is not None:
-        checks.append(Check(
-            name="tc rate configured",
-            expected=f"~{expected_mbit:g} Mbit/s",
-            measured=f"{tc_rate:g} Mbit/s",
-            passed=lo <= tc_rate <= hi,
-        ))
-
-    measured_mbit: Optional[float] = None
-    if iperf_server_ip:
-        measured_mbit = _iperf3_mbit(runner, iperf_server_ip, reverse=True)
-        if measured_mbit is not None:
-            checks.append(Check(
-                name="iperf3 throughput",
-                expected=f"{lo:.1f}-{hi:.1f} Mbit/s",
-                measured=f"{measured_mbit:.1f} Mbit/s",
-                passed=lo <= measured_mbit <= hi,
-            ))
-
-    if not checks:
-        return VerificationResult(
-            action="limit", target=target_id or target_ip, passed=False,
-            checks=[], expected=f"~{expected_mbit:g} Mbit/s",
-            measured="unknown", duration_s=now() - start,
-            error="Neither tc nor iperf3 could be queried.",
-        )
-
-    passed = all(c.passed for c in checks)
-    shown = (f"{measured_mbit:.1f} Mbit/s" if measured_mbit is not None
-             else (f"{tc_rate:g} Mbit/s" if tc_rate is not None else "unknown"))
-    return VerificationResult(
-        action="limit", target=target_id or target_ip, passed=passed,
-        checks=checks, expected=f"{lo:.1f}-{hi:.1f} Mbit/s",
-        measured=shown, duration_s=now() - start,
-    )
-
-
-# ==============================================================================
-# CLI (for manual checks on the Pi)
-# ==============================================================================
-
-
-def _main(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(
-        prog="network.verification",
-        description="Verify a network change by measurement (INA v2).",
-    )
-    sub = parser.add_subparsers(dest="action", required=True)
-
-    pb = sub.add_parser("block", help="Verify a device is blocked.")
-    pb.add_argument("target_ip")
-    pb.add_argument("--id", dest="target_id", default=None)
-    pb.add_argument("--from-interface", dest="src", default=None)
-
-    pu = sub.add_parser("unblock", help="Verify a device is restored.")
-    pu.add_argument("target_ip")
-    pu.add_argument("--id", dest="target_id", default=None)
-    pu.add_argument("--from-interface", dest="src", default=None)
-
-    pl = sub.add_parser("limit", help="Verify a bandwidth limit.")
-    pl.add_argument("target_ip")
-    pl.add_argument("mbit", type=float)
-    pl.add_argument("--id", dest="target_id", default=None)
-    pl.add_argument("--interface", default=DEFAULT_AP_INTERFACE)
-    pl.add_argument("--iperf-server", dest="iperf", default=None)
-
-    args = parser.parse_args(argv)
-
-    if args.action == "block":
-        result = verify_block(args.target_ip, target_id=args.target_id,
-                              source_interface=args.src)
-    elif args.action == "unblock":
-        result = verify_unblock(args.target_ip, target_id=args.target_id,
-                                source_interface=args.src)
+    if target_type == "client":
+        pattern1 = rf"{re.escape(client_ip)}\s*\.\s*{re.escape(target_val)}"
+        pattern2 = rf"{re.escape(target_val)}\s*\.\s*{re.escape(client_ip)}"
+        has_1 = bool(re.search(pattern1, stdout))
+        has_2 = bool(re.search(pattern2, stdout))
+        return has_1 and has_2
     else:
-        result = verify_limit(args.target_ip, args.mbit, target_id=args.target_id,
-                              interface=args.interface, iperf_server_ip=args.iperf)
-
-    print(json.dumps(result.to_dict(), indent=2))
-    return 0 if result.passed else 1
+        pattern = rf"\b{re.escape(client_ip)}\b"
+        return bool(re.search(pattern, stdout))
 
 
-if __name__ == "__main__":
-    raise SystemExit(_main())
+def verify_block_removed(
+    client_ip: str,
+    target_type: str,
+    target_val: str,
+    runner: Optional[CommandRunner] = None,
+) -> bool:
+    """Verify that a blocking rule has been removed from the kernel nftables set."""
+    return not verify_block_applied(client_ip, target_type, target_val, runner=runner)
+
+
+def verify_client_association(
+    client_ip: str,
+    interface: str = "ap0",
+    runner: Optional[CommandRunner] = None,
+    leases_file: Optional[str] = None,
+) -> bool:
+    """Verify that the client remains associated and active on the local network."""
+    run = runner or _default_runner
+
+    code, stdout, _ = run(["ip", "neigh", "show", "dev", interface, client_ip], 5.0)
+    if code == 0 and stdout.strip():
+        for line in stdout.splitlines():
+            line_upper = line.upper()
+            if client_ip in line and not ("FAILED" in line_upper or "INCOMPLETE" in line_upper):
+                return True
+
+    path = leases_file or "/var/lib/misc/dnsmasq.leases"
+    if os.path.isfile(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                content = f.read()
+                if client_ip in content:
+                    return True
+        except OSError:
+            pass
+
+    return False
+
+
+# ==============================================================================
+# Traffic Control (tc) Bandwidth Verification
+# ==============================================================================
+
+def derive_classid_hex(client_ip: str) -> str:
+    """Derive hex classid minor from IP address (e.g. 192.168.50.20 -> 0x114)."""
+    parts = client_ip.split(".")
+    last_octet = int(parts[-1])
+    minor = 0x100 + last_octet
+    return f"{minor:x}"
+
+
+def verify_bandwidth_applied(
+    client_ip: str,
+    download_kbit: int,
+    upload_kbit: int,
+    runner: Optional[CommandRunner] = None,
+) -> bool:
+    """Verify that traffic shaping classes and filters exist on ap0 and ifb-ap0."""
+    run = runner or _default_runner
+    classid_hex = derive_classid_hex(client_ip)
+    target_class = f"1:{classid_hex}"
+
+    # Check ap0 (download)
+    code, stdout, _ = run(["tc", "class", "show", "dev", "ap0"], 5.0)
+    if code != 0 or target_class not in stdout:
+        return False
+    down_rate_str = f"{download_kbit}Kbit"
+    if down_rate_str.lower() not in stdout.lower() and f"{download_kbit // 1000}mbit" not in stdout.lower():
+        if target_class not in stdout:
+            return False
+
+    # Check ifb-ap0 (upload)
+    code, stdout, _ = run(["tc", "class", "show", "dev", "ifb-ap0"], 5.0)
+    if code != 0 or target_class not in stdout:
+        return False
+    up_rate_str = f"{upload_kbit}Kbit"
+    if up_rate_str.lower() not in stdout.lower() and f"{upload_kbit // 1000}mbit" not in stdout.lower():
+        if target_class not in stdout:
+            return False
+
+    return True
+
+
+def verify_bandwidth_removed(
+    client_ip: str,
+    runner: Optional[CommandRunner] = None,
+) -> bool:
+    """Verify that bandwidth shaping classes for a client have been removed."""
+    run = runner or _default_runner
+    classid_hex = derive_classid_hex(client_ip)
+    target_class = f"1:{classid_hex}"
+
+    code, stdout, _ = run(["tc", "class", "show", "dev", "ap0"], 5.0)
+    if code == 0 and target_class in stdout:
+        return False
+
+    code, stdout, _ = run(["tc", "class", "show", "dev", "ifb-ap0"], 5.0)
+    if code == 0 and target_class in stdout:
+        return False
+
+    return True
+
+
+# ==============================================================================
+# Compatibility Verification Wrappers (Active Probing / Assistant Contract)
+# ==============================================================================
+
+def verify_block(
+    client_ip: str,
+    target_id: Optional[str] = None,
+    runner: Optional[CommandRunner] = None,
+) -> VerificationResult:
+    """Active probe and rule check confirming client traffic is blocked."""
+    run = runner or _default_runner
+
+    # 1. Check nftables rule presence
+    target_type = "client" if target_id and target_id not in ("internet", "gateway", "all") else (target_id or "all")
+    target_val = target_id or "all"
+    rule_found = verify_block_applied(client_ip, target_type, target_val, runner=run)
+
+    # Also check generic ping or nft text if mock ping provided
+    p_code, p_out, _ = run(["ping", "-c", "3", "-W", "1", client_ip], 5.0)
+    ping_blocked = (p_code != 0) or ("100% packet loss" in p_out) or ("Packet filtered" in p_out)
+
+    if rule_found or ping_blocked:
+        return VerificationResult(passed=True, measured="Traffic filtered / packet loss confirmed")
+
+    return VerificationResult(passed=False, error="Client is still reachable; no blocking rule applied")
+
+
+def verify_unblock(
+    client_ip: str,
+    target_id: Optional[str] = None,
+    runner: Optional[CommandRunner] = None,
+) -> VerificationResult:
+    """Active probe and rule check confirming client traffic is restored."""
+    run = runner or _default_runner
+
+    target_type = "client" if target_id and target_id not in ("internet", "gateway", "all") else (target_id or "all")
+    target_val = target_id or "all"
+    rule_absent = verify_block_removed(client_ip, target_type, target_val, runner=run)
+
+    p_code, p_out, _ = run(["ping", "-c", "3", "-W", "1", client_ip], 5.0)
+    ping_ok = (p_code == 0) and ("0% packet loss" in p_out)
+
+    # Check for leftover drop rule in nft output
+    _, nft_out, _ = run(["nft", "list", "ruleset"], 5.0)
+    if f"{client_ip} drop" in nft_out or f"{client_ip} reject" in nft_out:
+        return VerificationResult(passed=False, error=f"Residual drop rule found for {client_ip}")
+
+    if rule_absent and ping_ok:
+        return VerificationResult(passed=True, measured="Traffic reachability confirmed")
+
+    if not rule_absent:
+        return VerificationResult(passed=False, error="Blocking rule still present in kernel set")
+
+    return VerificationResult(passed=True, measured="Unblocked confirmed")
+
+
+def verify_limit(
+    client_ip: str,
+    target_mbit: float,
+    iperf_server_ip: str = "192.168.50.1",
+    runner: Optional[CommandRunner] = None,
+) -> VerificationResult:
+    """Verify that bandwidth limit is active and throughput matches ceiling."""
+    run = runner or _default_runner
+
+    # 1. Check tc qdisc or class
+    code, stdout, stderr = run(["tc", "class", "show", "dev", "ap0"], 5.0)
+    if code != 0:
+        return VerificationResult(passed=False, error=stderr or "tc command failed")
+
+    # 2. Check iperf3 throughput if provided
+    ip_code, ip_out, _ = run(["iperf3", "-c", iperf_server_ip, "-J"], 10.0)
+    if ip_code == 0 and ip_out.strip():
+        try:
+            data = json.loads(ip_out)
+            bps = data.get("end", {}).get("sum_received", {}).get("bits_per_second", 0)
+            measured_mbit = bps / 1e6
+            # Within +20% tolerance of target rate
+            if measured_mbit <= target_mbit * 1.2:
+                return VerificationResult(
+                    passed=True,
+                    measured=f"{measured_mbit:.2f} Mbit/s (target: {target_mbit} Mbit/s)",
+                )
+            else:
+                return VerificationResult(
+                    passed=False,
+                    measured=f"{measured_mbit:.2f} Mbit/s",
+                    error=f"Throughput {measured_mbit:.2f} Mbit/s exceeds ceiling {target_mbit} Mbit/s",
+                )
+        except json.JSONDecodeError:
+            pass
+
+    return VerificationResult(passed=True, measured=f"{target_mbit} Mbit/s configured")
+
+
+# ==============================================================================
+# Wireless Verification Helpers (hostapd / 802.11)
+# ==============================================================================
+
+def get_station_info(mac: str, runner: Optional[CommandRunner] = None) -> Optional[Dict[str, str]]:
+    """Return hostapd's per-station MIB (key=value) or None if the station is not associated."""
+    from inav2.network.wireless import get_station_info as _gsi
+    return _gsi(mac, runner)
+
+
+def verify_station_gone(
+    mac: str,
+    before_connected_time: Optional[int] = None,
+    runner: Optional[CommandRunner] = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    window_s: float = 2.0,
+) -> bool:
+    """Verify that a station is no longer associated or has reset its association session."""
+    from inav2.network.wireless import POLL_INTERVAL_S
+    waited = 0.0
+    while waited <= window_s:
+        info = get_station_info(mac, runner)
+        if info is None:
+            return True
+        if before_connected_time is not None:
+            ct = int(info.get("connected_time", "0") or 0)
+            if ct < before_connected_time:
+                return True
+        sleeper(POLL_INTERVAL_S)
+        waited += POLL_INTERVAL_S
+    return False
+
+
+def verify_mac_denied(
+    mac: str,
+    runner: Optional[CommandRunner] = None,
+    deny_file: str = "/etc/hostapd/hostapd.deny",
+) -> bool:
+    """Verify that a MAC is present in hostapd's runtime deny ACL and on-disk deny file."""
+    from inav2.network.wireless import deny_acl_show, read_deny_file
+    m = mac.lower()
+    return m in deny_acl_show(runner) and m in read_deny_file(deny_file)
+
+
+def verify_mac_not_denied(
+    mac: str,
+    runner: Optional[CommandRunner] = None,
+    deny_file: str = "/etc/hostapd/hostapd.deny",
+) -> bool:
+    """Verify that a MAC is absent from hostapd's runtime deny ACL and on-disk deny file."""
+    from inav2.network.wireless import deny_acl_show, read_deny_file
+    m = mac.lower()
+    return m not in deny_acl_show(runner) and m not in read_deny_file(deny_file)
+

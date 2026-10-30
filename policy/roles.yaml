@@ -16,4 +16,3 @@ roles:
     permissions:
       - "network:discovery:read"
       - "network:status:read"
-

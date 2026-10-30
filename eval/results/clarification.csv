@@ -7,3 +7,5 @@ C5-block-no-device,block it,clarify,True,Which device should I block?
 C6-empty,,clarify,True,Could you say what you'd like to do?
 C7-vague,do something about the hog,clarify,True,"I didn't catch an action. Try: 'list devices', 'limit lab-laptop-3 to 5 Mbps', 'block lab-laptop-3', or 'restore lab-laptop-3'."
 C8-restore-no-device,unblock,clarify,True,Which device should I restore?
+C9-ban-no-duration,ban guest-phone,clarify,True,"Ban guest-phone permanently, or for how many minutes?"
+C10-kick-no-device,kick it off,clarify,True,Which device should I disconnect?

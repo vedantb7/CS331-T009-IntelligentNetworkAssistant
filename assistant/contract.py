@@ -26,20 +26,51 @@ from typing import Any, Dict, List, Optional
 class ToolName(str, Enum):
     """The only actions the system can perform."""
 
-    LIST_DEVICES = "list_devices"
+    # Canonical 2026-07-28 MCP Tools
+    BLOCK_CLIENT = "block_client"
+    UNBLOCK_CLIENT = "unblock_client"
     LIMIT_BANDWIDTH = "limit_bandwidth"
+    REMOVE_BANDWIDTH_LIMIT = "remove_bandwidth_limit"
+    GET_STATUS = "get_status"
+    KICK_CLIENT = "kick_client"
+    BAN_CLIENT = "ban_client"
+    UNBAN_CLIENT = "unban_client"
+
+    # Aliases for backwards compatibility with earlier drafts
+    LIST_DEVICES = "list_devices"
     BLOCK_DEVICE = "block_device"
     RESTORE_DEVICE = "restore_device"
 
 
 # Human-readable descriptions, reused in the system prompt and in --help output.
 TOOL_DESCRIPTIONS: Dict[str, str] = {
+    ToolName.BLOCK_CLIENT.value: (
+        "Block a client's IPv4 traffic to another client, gateway, internet, or all."
+    ),
+    ToolName.UNBLOCK_CLIENT.value: (
+        "Unblock a client's traffic to a previously blocked target."
+    ),
+    ToolName.LIMIT_BANDWIDTH.value: (
+        "Limit a device's download and upload bandwidth ceiling in kbit/s or Mbit/s."
+    ),
+    ToolName.REMOVE_BANDWIDTH_LIMIT.value: (
+        "Remove any active bandwidth rate ceiling on a client."
+    ),
+    ToolName.GET_STATUS.value: (
+        "Query client device status, associations, active blocks, and bandwidth limits."
+    ),
+    ToolName.KICK_CLIENT.value: (
+        "Disconnect a device from Wi-Fi once; it will usually reconnect by itself."
+    ),
+    ToolName.BAN_CLIENT.value: (
+        "Stop a device from connecting to the Wi-Fi at all (optionally for N minutes)."
+    ),
+    ToolName.UNBAN_CLIENT.value: (
+        "Allow a previously banned device to connect to the Wi-Fi again."
+    ),
     ToolName.LIST_DEVICES.value: (
         "List the devices currently on the managed network, by their "
         "admin-assigned names, with their class and current state."
-    ),
-    ToolName.LIMIT_BANDWIDTH.value: (
-        "Limit a device's bandwidth to a given rate in Mbit/s."
     ),
     ToolName.BLOCK_DEVICE.value: "Block a device from the network.",
     ToolName.RESTORE_DEVICE.value: (

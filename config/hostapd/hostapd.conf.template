@@ -1,0 +1,24 @@
+# /etc/hostapd/hostapd.conf template for INA v2
+interface=ap0
+driver=nl80211
+ssid=INA-Router
+country_code=IN
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+ap_isolate=1
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=ChangeThisPassphraseToSomethingSecure123!
+
+# --- control interface (root-only; INA reaches it via sudo ina-netctl) ---
+ctrl_interface=/run/hostapd
+ctrl_interface_group=0
+
+# --- MAC access control: accept everyone except entries in the deny file ---
+macaddr_acl=0
+deny_mac_file=/etc/hostapd/hostapd.deny
+

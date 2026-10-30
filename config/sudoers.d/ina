@@ -1,0 +1,3 @@
+# /etc/sudoers.d/ina -- Privilege boundary for INA unprivileged service
+ina ALL=(root) NOPASSWD: /usr/local/sbin/ina-netctl
+

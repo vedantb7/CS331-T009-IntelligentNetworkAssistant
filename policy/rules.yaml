@@ -1,14 +1,44 @@
 # Policy Rules Configuration
-# NOTE: The policies defined here are initial placeholders.
-# Implementation and final schema will be defined in subsequent milestones.
-
 version: "1.0"
-rules:
-  - id: "placeholder-rule-001"
-    name: "Default Deny All"
-    description: "Placeholder rule to enforce default-deny posture on unauthorized devices"
-    enabled: false
-    action: "deny"
-    conditions:
-      network: "test-network"
 
+protected_macs:
+  - "aa:bb:cc:dd:ee:00"  # pi-gateway / ap0
+  - "aa:bb:cc:dd:ee:01"  # admin-laptop
+  - "aa:bb:cc:dd:ee:02"  # probe-laptop
+
+rules:
+  - id: "wifi-001"
+    name: "Never evict infrastructure"
+    actions: ["kick_client", "ban_client"]
+    effect: "deny"
+    conditions: { device_class: ["protected"] }
+
+  - id: "wifi-002"
+    name: "Operator may kick guests"
+    actions: ["kick_client"]
+    effect: "allow"
+    conditions: { role: ["operator"], device_class: ["guest", "unknown"] }
+
+  - id: "wifi-003"
+    name: "Operator may ban guests temporarily"
+    actions: ["ban_client"]
+    effect: "allow"
+    conditions: { role: ["operator"], device_class: ["guest", "unknown"], max_duration_minutes: 60, duration_required: true }
+
+  - id: "wifi-004"
+    name: "Operator may lift own bans"
+    actions: ["unban_client"]
+    effect: "allow"
+    conditions: { role: ["operator"], banned_by_role: ["operator"] }
+
+  - id: "wifi-005"
+    name: "Admin full Wi-Fi control (non-protected)"
+    actions: ["kick_client", "ban_client", "unban_client"]
+    effect: "allow"
+    conditions: { role: ["admin"] }
+
+  - id: "wifi-006"
+    name: "Viewers cannot mutate"
+    actions: ["kick_client", "ban_client", "unban_client"]
+    effect: "deny"
+    conditions: { role: ["viewer"] }

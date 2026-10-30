@@ -1,0 +1,8 @@
+[Unit]
+Description=INA: expire temporary Wi-Fi bans
+After=hostapd.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/ina-netctl expire-bans
+

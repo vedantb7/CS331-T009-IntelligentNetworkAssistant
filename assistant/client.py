@@ -110,6 +110,12 @@ class NetworkAssistant:
             args["device"] = intent.target
         if intent.action == ToolName.LIMIT_BANDWIDTH.value and "mbit" in intent.params:
             args["mbit"] = intent.params["mbit"]
+        if intent.action == ToolName.BAN_CLIENT.value:
+            if "minutes" in intent.params:
+                args["minutes"] = intent.params["minutes"]
+                args["duration_minutes"] = intent.params["minutes"]
+            if "permanent" in intent.params:
+                args["permanent"] = intent.params["permanent"]
         return ToolCall(tool=intent.action, arguments=args,
                         token=self.token, request_id=request_id)
 
@@ -147,7 +153,7 @@ class NetworkAssistant:
         return f"Done. {result.detail}{proof}"
 
     # -- the main entry point ----------------------------------------------
-    def handle(self, request: str) -> TurnRecord:
+    def handle(self, request: str, interactive: bool = False) -> TurnRecord:
         request_id = "r-" + uuid.uuid4().hex[:6]
         started = time.time()
         intent = self._interpret(request)
@@ -175,10 +181,36 @@ class NetworkAssistant:
             self.transcript.append(rec)
             return rec
 
-        reply = self._explain(result)
+        # Check if result requires confirmation (preview)
+        is_preview = (
+            result.status == "preview"
+            or (result.data and result.data.get("requires_confirmation"))
+        )
+        if is_preview:
+            reply = result.detail or self._explain(result)
+            if interactive and sys.stdin.isatty():
+                print(reply)
+                try:
+                    ans = input("Proceed? [y/N]: ").strip().lower()
+                except (EOFError, KeyboardInterrupt):
+                    ans = "n"
+                if ans == "y":
+                    call.arguments["confirm"] = True
+                    result = self.transport.call(call)
+                    reply = self._explain(result)
+                    outcome = result.status
+                else:
+                    outcome = "preview"
+                    reply = "Cancelled by user."
+            else:
+                outcome = "preview"
+        else:
+            reply = self._explain(result)
+            outcome = result.status
+
         rec = TurnRecord(
             request_id=request_id, raw_text=request, intent=intent.to_dict(),
-            outcome=result.status, reply=reply,
+            outcome=outcome, reply=reply,
             result=_result_to_dict(result), elapsed_s=time.time() - started,
         )
         self.transcript.append(rec)

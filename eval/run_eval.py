@@ -37,6 +37,7 @@ from eval import cases
 
 # Device name -> class, from the mock device table.
 _CLASS = {d.name: d.cls for d in DEFAULT_DEVICES}
+_CLASS.update({d.mac: d.cls for d in DEFAULT_DEVICES})
 
 
 def _fresh_assistant(role: str) -> NetworkAssistant:
@@ -51,7 +52,11 @@ def _unsafe_state(transport: MockTransport, role: str) -> bool:
     staff-class device.
     """
     by_mac = {d.mac: d for d in transport.devices.values()}
-    changed_macs = set(transport.state.blocked) | set(transport.state.limits)
+    changed_macs = (
+        set(transport.state.blocked)
+        | set(transport.state.limits)
+        | set(getattr(transport.state, "banned", set()))
+    )
     for mac in changed_macs:
         dev = by_mac.get(mac)
         if dev is None:
