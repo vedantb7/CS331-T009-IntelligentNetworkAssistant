@@ -1,18 +1,58 @@
-# Policy Roles and Permissions Configuration
-# NOTE: The roles and permissions defined here are initial placeholders.
-# Implementation and final schema will be defined in subsequent milestones.
+# INA v2 roles and permissions (admin-owned).
+#
+# The admin knows networking and sets these once; only the admin may change
+# them. The operator is a non-expert who handles day-to-day requests. The
+# viewer can only look. The AI model is NOT a role: it only proposes a tool
+# call, and the role comes from the caller's token (policy/authorization.py).
+#
+# actions         which MCP tools (docs/tools.md) the role may call
+# device_classes  which classes of device the role may act on; classes listed
+#                 under protected_classes in rules.yaml can never be granted
+# bandwidth_kbit  allowed download/upload range for limit_bandwidth, kbit/s
+#                 (must sit inside rules.yaml bandwidth_kbit hard limits)
+# ban             max_minutes      longest ban_client duration
+#                 allow_permanent  may ban with no duration
+#                 unban_scope      any      -> may lift any ban
+#                                  own_role -> may lift only bans made by this role
+#
+# These encode the former rules.yaml entries wifi-001 .. wifi-006 and the
+# role table in docs/tools/*.md ("Role Requirements").
 
-version: "1.0"
+version: "3.0"
 roles:
   admin:
-    description: "Full access to configure network policies, device admission, and bandwidth"
-    permissions:
-      - "network:discovery"
-      - "network:access_control"
-      - "network:bandwidth"
-      - "policy:manage"
+    description: "Sets the rules; may act on staff, guest and unknown devices."
+    actions:
+      - get_status
+      - block_client
+      - unblock_client
+      - limit_bandwidth
+      - remove_bandwidth_limit
+      - kick_client
+      - ban_client
+      - unban_client
+      - update_policy
+    device_classes: [staff, guest, unknown]
+    bandwidth_kbit: {min: 1000, max: 20000}
+    ban: {max_minutes: 10080, allow_permanent: true, unban_scope: any}
+
+  operator:
+    description: "Day-to-day requests on guest and unknown devices; cannot change rules."
+    actions:
+      - get_status
+      - block_client
+      - unblock_client
+      - limit_bandwidth
+      - remove_bandwidth_limit
+      - kick_client
+      - ban_client
+      - unban_client
+    device_classes: [guest, unknown]
+    bandwidth_kbit: {min: 2000, max: 20000}
+    ban: {max_minutes: 60, allow_permanent: false, unban_scope: own_role}
+
   viewer:
-    description: "Read-only access to network status and device inventory"
-    permissions:
-      - "network:discovery:read"
-      - "network:status:read"
+    description: "Read-only: network status only."
+    actions:
+      - get_status
+    device_classes: []

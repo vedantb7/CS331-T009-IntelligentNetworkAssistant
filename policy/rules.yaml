@@ -1,44 +1,48 @@
-# Policy Rules Configuration
-version: "1.0"
+# INA v2 rulebook (admin-owned).
+#
+# Anything not explicitly allowed is denied. Per-role permissions live in
+# roles.yaml; this file holds what applies to everyone.
 
+version: "3.0"
+default_decision: deny
+
+# Devices of these classes can never be changed by any role.
+protected_classes: [protected]
+
+# Device names (from devices.yaml) that are always protected, whatever their class.
+protected_devices: [pi-gateway, admin-laptop, probe-laptop]
+
+# MAC addresses that can never be blocked, limited, kicked or banned.
+# Also read by network/wireless.py (load_protected_macs), so keep this key and
+# keep MAC addresses out of the rest of this file.
 protected_macs:
   - "aa:bb:cc:dd:ee:00"  # pi-gateway / ap0
   - "aa:bb:cc:dd:ee:01"  # admin-laptop
   - "aa:bb:cc:dd:ee:02"  # probe-laptop
 
-rules:
-  - id: "wifi-001"
-    name: "Never evict infrastructure"
-    actions: ["kick_client", "ban_client"]
-    effect: "deny"
-    conditions: { device_class: ["protected"] }
+# IP addresses that can never be targeted (the Pi router / gateway).
+protected_ips: ["192.168.50.1"]
 
-  - id: "wifi-002"
-    name: "Operator may kick guests"
-    actions: ["kick_client"]
-    effect: "allow"
-    conditions: { role: ["operator"], device_class: ["guest", "unknown"] }
+# Clients addressed by IP must be a host address in this subnet (docs/network.md).
+managed_subnet: "192.168.50.0/24"
 
-  - id: "wifi-003"
-    name: "Operator may ban guests temporarily"
-    actions: ["ban_client"]
-    effect: "allow"
-    conditions: { role: ["operator"], device_class: ["guest", "unknown"], max_duration_minutes: 60, duration_required: true }
+# Client names, exactly as in mcp_server/schemas.py CLIENT_REGEX (lower-case
+# letters, digits and '-'). Anything else is rejected before any lookup, so a
+# hostname cannot smuggle in text.
+client_name:
+  pattern: "[a-z0-9][a-z0-9-]{0,62}"
 
-  - id: "wifi-004"
-    name: "Operator may lift own bans"
-    actions: ["unban_client"]
-    effect: "allow"
-    conditions: { role: ["operator"], banned_by_role: ["operator"] }
+# Scope keywords accepted as a block_client / unblock_client target.
+block_targets: [gateway, internet, all]
 
-  - id: "wifi-005"
-    name: "Admin full Wi-Fi control (non-protected)"
-    actions: ["kick_client", "ban_client", "unban_client"]
-    effect: "allow"
-    conditions: { role: ["admin"] }
+# Absolute limits no role may exceed, even if roles.yaml is edited carelessly.
+# They match mcp_server/schemas.py (MIN/MAX_BANDWIDTH_KBIT, MAX_BAN_MINUTES).
+bandwidth_kbit:
+  hard_min: 256
+  hard_max: 20000
+ban_minutes:
+  hard_max: 10080
 
-  - id: "wifi-006"
-    name: "Viewers cannot mutate"
-    actions: ["kick_client", "ban_client", "unban_client"]
-    effect: "deny"
-    conditions: { role: ["viewer"] }
+# Free-text ban reason, as in mcp_server/schemas.py REASON_REGEX.
+ban_reason:
+  pattern: "[A-Za-z0-9 .,_-]{0,120}"
