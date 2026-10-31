@@ -108,8 +108,17 @@ class NetworkAssistant:
         args: Dict[str, Any] = {}
         if intent.target is not None:
             args["device"] = intent.target
+            args["client"] = intent.target  # real server uses client= not device=
+        # block_client and unblock_client require a target argument
+        if intent.action in (ToolName.BLOCK_CLIENT.value, ToolName.UNBLOCK_CLIENT.value):
+            if "target" not in args:
+                args["target"] = "all"
         if intent.action == ToolName.LIMIT_BANDWIDTH.value and "mbit" in intent.params:
-            args["mbit"] = intent.params["mbit"]
+            mbit = intent.params["mbit"]
+            args["mbit"] = mbit
+            # Real server expects kbit integers
+            args["download_kbit"] = int(mbit * 1000)
+            args["upload_kbit"] = int(mbit * 1000)
         if intent.action == ToolName.BAN_CLIENT.value:
             if "minutes" in intent.params:
                 args["minutes"] = intent.params["minutes"]
@@ -132,7 +141,7 @@ class NetworkAssistant:
                         f"It may need to be rolled back.")
             return f"That didn't succeed: {result.detail}"
         # success
-        if result.tool == ToolName.LIST_DEVICES.value:
+        if result.tool in (ToolName.GET_STATUS.value, ToolName.LIST_DEVICES.value):
             rows = result.data.get("devices", [])
             if not rows:
                 return "No devices are on the network right now."
@@ -245,6 +254,14 @@ def _result_to_dict(result: ToolResult) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _build_transport(args: argparse.Namespace) -> Transport:
+    if args.server == "service":
+        # Connect directly to the local NetworkService (on Pi)
+        try:
+            from assistant.transport import ServiceTransport
+            return ServiceTransport()
+        except Exception as e:
+            print(f"Warning: Could not connect to NetworkService ({e}), using mock.")
+            return MockTransport()
     if args.server:
         from assistant.transport import HttpTransport
         return HttpTransport(base_url=args.server)

@@ -136,7 +136,7 @@ class MockTransport(Transport):
         if role is None:
             return self._deny(request, "Unknown or missing role token.", "R-token")
 
-        if request.tool == ToolName.LIST_DEVICES.value:
+        if request.tool in (ToolName.LIST_DEVICES.value, ToolName.GET_STATUS.value):
             return self._list_devices(request, role)
 
         device = self._resolve(request.arguments.get("device"))
@@ -161,7 +161,7 @@ class MockTransport(Transport):
             return self._limit(request, role, device)
         if request.tool in (ToolName.BLOCK_DEVICE.value, ToolName.BLOCK_CLIENT.value):
             return self._block(request, device)
-        if request.tool == ToolName.RESTORE_DEVICE.value:
+        if request.tool in (ToolName.RESTORE_DEVICE.value, ToolName.UNBLOCK_CLIENT.value):
             return self._restore(request, device)
         if request.tool in (ToolName.KICK_CLIENT.value, "kick_client"):
             return self._kick(request, device)
@@ -355,7 +355,7 @@ class HttpTransport(Transport):
 
     def device_names(self) -> List[str]:
         """Fetch current device names via a list_devices call (best effort)."""
-        result = self.call(ToolCall(tool=ToolName.LIST_DEVICES.value,
+        result = self.call(ToolCall(tool=ToolName.GET_STATUS.value,
                                     token="operator-token"))
         rows = result.data.get("devices", [])
         return [r.get("name") for r in rows if r.get("name")]
@@ -444,7 +444,7 @@ class ServiceTransport(Transport):
                     detail=res.message or f"Removed bandwidth limits for {device}.",
                 )
 
-            elif request.tool == ToolName.RESTORE_DEVICE.value:
+            elif request.tool in (ToolName.RESTORE_DEVICE.value, ToolName.UNBLOCK_CLIENT.value):
                 self.service.unblock(client=device, target="all", role=role)
                 self.service.remove_limit(client=device, role=role)
                 return ToolResult(

@@ -151,7 +151,7 @@ def parse(text: str) -> Intent:
     if _UNBAN_RE.search(low):
         action = ToolName.UNBAN_CLIENT.value
     elif _contains(low, _UNBLOCK_WORDS):
-        action = ToolName.RESTORE_DEVICE.value
+        action = ToolName.UNBLOCK_CLIENT.value
     elif _BAN_RE.search(low):
         action = ToolName.BAN_CLIENT.value
     elif _KICK_RE.search(low):
@@ -159,9 +159,9 @@ def parse(text: str) -> Intent:
     elif _contains(low, _LIMIT_WORDS):
         action = ToolName.LIMIT_BANDWIDTH.value
     elif _contains(low, _BLOCK_WORDS):
-        action = ToolName.BLOCK_DEVICE.value
+        action = ToolName.BLOCK_CLIENT.value
     elif _contains(low, _LIST_WORDS):
-        action = ToolName.LIST_DEVICES.value
+        action = ToolName.GET_STATUS.value
     else:
         return Intent(
             action="unknown", raw_text=raw, confidence=0.2,
@@ -174,7 +174,7 @@ def parse(text: str) -> Intent:
         )
 
     # 2. list_devices needs nothing else.
-    if action == ToolName.LIST_DEVICES.value:
+    if action == ToolName.GET_STATUS.value:
         return Intent(action=action, raw_text=raw, confidence=0.95)
 
     # 3. Target device and parameters
@@ -251,7 +251,7 @@ def parse(text: str) -> Intent:
 
     # block / restore
     if device is None:
-        verb = "block" if action == ToolName.BLOCK_DEVICE.value else "restore"
+        verb = "block" if action == ToolName.BLOCK_CLIENT.value else "restore"
         return Intent(action=action, raw_text=raw, confidence=0.5,
                       needs_clarification=True,
                       clarification=f"Which device should I {verb}?")
