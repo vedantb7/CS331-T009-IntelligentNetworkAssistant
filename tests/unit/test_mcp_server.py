@@ -10,6 +10,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from unittest import mock
 
 from inav2.mcp_server import server, tools
 from inav2.mcp_server.tools import TOKEN_ENV, ToolError
@@ -69,8 +70,12 @@ class TestMCPServer(unittest.TestCase):
                                                env={"INA_DEMO_TOKENS": "1"})
         self._old_token = os.environ.get(TOKEN_ENV)
         os.environ[TOKEN_ENV] = "operator-token"
+        self.command_log = os.path.join(self.tmp, "commands.jsonl")
+        self._env = mock.patch.dict(os.environ, {"INA_COMMAND_LOG": self.command_log})
+        self._env.start()
 
     def tearDown(self) -> None:
+        self._env.stop()
         tools._guard = None
         if self._old_token is None:
             os.environ.pop(TOKEN_ENV, None)

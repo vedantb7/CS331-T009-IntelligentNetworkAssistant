@@ -17,7 +17,8 @@ from unittest import mock
 from inav2.mcp_server import tools
 from inav2.mcp_server.schemas import BlockResult
 from inav2.mcp_server.tools import TOKEN_ENV, ToolError
-from inav2.network import netctl, privileged
+from inav2.network import command_log, netctl, privileged
+from inav2.network.command_log import request_scope, valid_request_id, verify_command_log
 from inav2.network.privileged import DEFAULT_NETCTL_COMMAND, NetctlService
 from inav2.network.service import (
     ClientNotFoundError,
@@ -60,6 +61,20 @@ class InProcessNetctl:
         return code, out.getvalue(), ""
 
 
+def without_request_id(argv):
+    """argv after the sudo prefix, minus '--request-id <id>' (which must be present and valid)."""
+    rest = list(argv[len(PREFIX):])
+    i = rest.index("--request-id")
+    assert valid_request_id(rest[i + 1]), rest[i + 1]
+    del rest[i:i + 2]
+    return rest
+
+
+def read_jsonl(path):
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
 def block_result_dict(**overrides):
     data = {"client": "guest-phone", "client_ip": "192.168.50.34", "target": "internet",
             "blocked": True, "changed": True, "verified": True, "message": "ok"}
@@ -80,8 +95,10 @@ class TestNetctlServiceClient(unittest.TestCase):
         runner = RecordingRunner({"ok": True, "result": block_result_dict()})
         res = NetctlService(command=" ".join(PREFIX), runner=runner).block(
             "guest-phone", "internet", role="operator")
-        self.assertEqual(runner.calls, [PREFIX + ["--json", "--role", "operator", "block",
-                                                  "--", "guest-phone", "internet"]])
+        self.assertEqual(len(runner.calls), 1)
+        self.assertEqual(runner.calls[0][:len(PREFIX)], PREFIX)
+        self.assertEqual(without_request_id(runner.calls[0]),
+                         ["--json", "--role", "operator", "block", "--", "guest-phone", "internet"])
         self.assertIsInstance(res, BlockResult)
         self.assertTrue(res.blocked)
         self.assertEqual(res.client_ip, "192.168.50.34")
@@ -93,9 +110,27 @@ class TestNetctlServiceClient(unittest.TestCase):
             "verified": True, "currently_associated": False, "expires_at": None, "message": None}})
         NetctlService(command=" ".join(PREFIX), runner=runner).ban(
             "guest-phone", duration_minutes=30, reason="abuse", confirm=True, role="admin")
-        self.assertEqual(runner.calls[0][len(PREFIX):], [
+        self.assertEqual(without_request_id(runner.calls[0]), [
             "--json", "--role", "admin", "ban", "--minutes", "30", "--reason", "abuse", "--yes",
             "--", "guest-phone"])
+
+    def test_request_id_and_returned_commands_join_the_trace(self):
+        records = [{"seq": 7, "argv": ["nft", "add", "element"], "exit_code": 0}]
+        runner = RecordingRunner({"ok": True, "result": block_result_dict(), "commands": records})
+        with request_scope("abc123") as trace:
+            NetctlService(runner=runner).block("guest-phone", "internet")
+        argv = runner.calls[0]
+        self.assertEqual(argv[argv.index("--request-id") + 1], "abc123")
+        self.assertEqual(trace, records)
+
+    def test_commands_return_even_when_the_operation_fails(self):
+        records = [{"seq": 3, "argv": ["nft", "add", "element"], "exit_code": 1, "stderr": "boom"}]
+        runner = RecordingRunner({"ok": False, "error": "KernelMutationError", "message": "boom",
+                                  "commands": records}, code=1)
+        with request_scope("abc124") as trace:
+            with self.assertRaises(KernelMutationError):
+                NetctlService(runner=runner).block("guest-phone", "internet")
+        self.assertEqual(trace, records)
 
     def test_error_envelope_reraises_service_error_class(self):
         runner = RecordingRunner({"ok": False, "error": "PolicyDeniedError", "message": "protected"}, code=1)
@@ -131,6 +166,9 @@ class NetctlFixture(unittest.TestCase):
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp()
+        self.command_log = os.path.join(self.tmp, "commands.jsonl")
+        self._env = mock.patch.dict(os.environ, {"INA_COMMAND_LOG": self.command_log})
+        self._env.start()
         self.kernel = MockCombinedRunner()
         self._orig_service = netctl.default_service
         netctl.default_service = NetworkService(
@@ -143,6 +181,7 @@ class NetctlFixture(unittest.TestCase):
 
     def tearDown(self):
         netctl.default_service = self._orig_service
+        self._env.stop()
         shutil.rmtree(self.tmp, ignore_errors=True)
 
     def run_netctl(self, *argv):
@@ -164,7 +203,9 @@ class TestNetctlJsonInterface(NetctlFixture):
     def test_error_envelope(self):
         code, env = self.run_netctl("--json", "--role", "operator", "block", "--", "printer-9", "internet")
         self.assertEqual(code, 1)
-        self.assertEqual(env, {"ok": False, "error": "ClientNotFoundError", "message": env["message"]})
+        self.assertFalse(env["ok"])
+        self.assertEqual(env["error"], "ClientNotFoundError")
+        self.assertEqual(set(env), {"ok", "error", "message", "request_id", "commands"})
 
     def test_separator_stops_option_injection(self):
         code, env = self.run_netctl("--json", "--role", "operator", "block", "--", "-rf", "internet")
@@ -174,7 +215,57 @@ class TestNetctlJsonInterface(NetctlFixture):
 
     def test_ban_owner(self):
         code, env = self.run_netctl("--json", "--role", "viewer", "ban-owner", "--", "guest-phone")
-        self.assertEqual((code, env), (0, {"ok": True, "result": {"banned_by_role": None}}))
+        self.assertEqual(code, 0)
+        self.assertEqual(env["result"], {"banned_by_role": None})
+        self.assertEqual(env["commands"], [])
+
+    def test_commands_are_returned_and_logged_as_they_run(self):
+        code, env = self.run_netctl("--json", "--request-id", "req-42", "--role", "operator",
+                                    "block", "--", "guest-phone", "internet")
+        self.assertEqual(code, 0)
+        self.assertEqual(env["request_id"], "req-42")
+        returned = env["commands"]
+        self.assertTrue(returned)
+        self.assertTrue(all(c["argv"][0] == "nft" for c in returned))
+        self.assertTrue(all({"exit_code", "stdout", "stderr", "duration_ms"} <= set(c) for c in returned))
+        # Exactly the records in the command log: same seq, hash and request ID.
+        logged = read_jsonl(self.command_log)
+        self.assertEqual(returned, logged)
+        self.assertTrue(all(r["request_id"] == "req-42" for r in logged))
+        self.assertEqual(verify_command_log(self.command_log), (True, None))
+        # The service audit entry carries the same request ID.
+        audit = read_jsonl(os.path.join(self.tmp, "audit.log"))
+        self.assertEqual(audit[-1]["details"]["request_id"], "req-42")
+
+    def test_failed_command_output_comes_back(self):
+        self.kernel.nft_runner.fail_next_apply = True
+        code, env = self.run_netctl("--json", "--role", "operator", "block", "--", "guest-phone", "internet")
+        self.assertEqual(code, 1)
+        failing = [c for c in env["commands"] if c["exit_code"] != 0]
+        self.assertTrue(failing)
+        self.assertIn("could not add element", failing[0]["stderr"])
+
+    def test_bad_request_id_rejected(self):
+        with self.assertRaises(SystemExit):
+            with contextlib.redirect_stderr(io.StringIO()):
+                netctl.main(["--json", "--request-id", "x; rm -rf /", "status"])
+
+    def test_tampered_command_log_detected(self):
+        self.run_netctl("--json", "--role", "viewer", "status", "--")
+        self.run_netctl("--json", "--role", "operator", "block", "--", "guest-phone", "internet")
+        lines = open(self.command_log, encoding="utf-8").read().splitlines()
+        rec = json.loads(lines[0]); rec["exit_code"] = 99
+        lines[0] = json.dumps(rec, sort_keys=True, separators=(",", ":"))
+        with open(self.command_log, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        self.assertEqual(verify_command_log(self.command_log), (False, 1))
+
+    def test_logging_failure_does_not_hide_the_result(self):
+        with mock.patch.object(command_log, "append_record", side_effect=OSError("disk full")):
+            code, env = self.run_netctl("--json", "--role", "operator", "block", "--", "guest-phone", "internet")
+        self.assertEqual(code, 0)
+        self.assertTrue(env["result"]["blocked"])
+        self.assertTrue(all(c.get("log_error") == "disk full" for c in env["commands"]))
 
 
 class TestMcpToolsThroughBoundary(NetctlFixture):
@@ -203,14 +294,33 @@ class TestMcpToolsThroughBoundary(NetctlFixture):
         res = tools.block_client(client="guest-phone", target="internet")
         self.assertTrue(res.blocked)
         self.assertTrue(res.verified)
-        self.assertEqual(self.boundary.calls[-1][len(PREFIX):],
+        self.assertEqual(without_request_id(self.boundary.calls[-1]),
                          ["--json", "--role", "operator", "block", "--", "guest-phone", "internet"])
         self.assertTrue(any(c[0] == "nft" for c in self.kernel.commands))
 
     def test_role_comes_from_token(self):
         os.environ[TOKEN_ENV] = "admin-token"
         tools.limit_bandwidth(client="lab-laptop-3", download_kbit=5000, upload_kbit=5000)
-        self.assertIn(["--role", "admin"], [c[len(PREFIX) + 1:len(PREFIX) + 3] for c in self.boundary.calls])
+        self.assertIn("--role admin", [" ".join(without_request_id(c)[1:3]) for c in self.boundary.calls])
+
+    def test_output_returns_to_mcp_and_all_logs_share_the_request_id(self):
+        tools.block_client(client="guest-phone", target="internet")
+        policy = read_jsonl(os.path.join(self.tmp, "policy.jsonl"))
+        decision, outcome = policy[-2], policy[-1]
+        self.assertEqual((decision["event"], outcome["event"]), ("decision", "outcome"))
+        rid = decision["request_id"]
+        self.assertEqual(outcome["request_id"], rid)
+        # The request ID crossed the boundary ...
+        argv = self.boundary.calls[-1]
+        self.assertEqual(argv[argv.index("--request-id") + 1], rid)
+        # ... every command was logged on the root side under it ...
+        logged = [r for r in read_jsonl(self.command_log) if r["request_id"] == rid]
+        self.assertTrue(logged)
+        # ... and came back to the MCP server, whose outcome references the same records.
+        self.assertEqual([c["seq"] for c in outcome["commands"]], [r["seq"] for r in logged])
+        self.assertEqual([c["argv"] for c in outcome["commands"]], [r["argv"] for r in logged])
+        audit = read_jsonl(os.path.join(self.tmp, "audit.log"))
+        self.assertEqual(audit[-1]["details"]["request_id"], rid)
 
     def test_denied_call_never_crosses_boundary(self):
         with self.assertRaises(ToolError):

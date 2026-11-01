@@ -95,12 +95,14 @@ class PolicyGuard:
         return result
 
     def record_outcome(self, result: GuardResult, status: str, detail: str = "",
-                       verification_passed: Optional[bool] = None) -> None:
+                       verification_passed: Optional[bool] = None,
+                       commands: Optional[list] = None) -> None:
         """Log what actually happened. Call once per allowed request after executing.
 
         status: "success", "preview" (ban_client without confirm), or "failure".
+        commands: the request's command trace (see network/command_log.py), summarised.
         """
-        self.audit.log_outcome(result.request_id, status, detail, verification_passed)
+        self.audit.log_outcome(result.request_id, status, detail, verification_passed, commands)
 
     def tools_for_token(self, token: Any) -> list:
         """MCP tools to advertise to this caller (empty for a bad token)."""

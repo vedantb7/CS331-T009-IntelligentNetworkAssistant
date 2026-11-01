@@ -8,13 +8,25 @@ operator laptop                         ina-router (Raspberry Pi 5)
 assistant ──ssh (stdio MCP)──► ina-mcp  [user ina]
                                │  tools/call → inputSchema check (SDK) → PolicyGuard (token → role)
                                │  allowed only:
-                               └─► sudo -n /usr/local/sbin/ina-netctl --json --role <role> <cmd> -- <args>
+                               └─► sudo -n /usr/local/sbin/ina-netctl --json --request-id <id> --role <role> <cmd> -- <args>
                                         [root]  network.service: validate → lock → nft/tc/hostapd_cli
                                                 → verify → rollback → /var/lib/ina/state.json
                                                 → /var/log/ina/audit.log
-                                        stdout: {"ok": true, "result": {...}}
-                                             or {"ok": false, "error": "<ErrorClass>", "message": "..."}
+                                                each command, as it finishes → /var/log/ina/commands.jsonl
+                                        stdout: {"ok": true,  "request_id": …, "result": {...}, "commands": [...]}
+                                             or {"ok": false, "request_id": …, "error": "<ErrorClass>", "message": "...", "commands": [...]}
 ```
+
+## Command output and logs (workflow step 5)
+
+The output of every command goes back to the MCP server and is logged at the same time:
+
+1. Inside `ina-netctl`, the service's runner is wrapped by `RecordingRunner` (`network/command_log.py`). When a command finishes, its record is written straight away to `/var/log/ina/commands.jsonl`, before the next command runs. The record holds argv, exit code, stdout and stderr (each capped at 4000 characters, with a `truncated` flag), duration and the request ID. The log is append-only, fsynced and hash-chained (`verify_command_log()`), so the trail survives a crash in the middle of an operation.
+2. The same records are added to the request's trace and returned in the `commands` field of the envelope. This happens **on failure as well**, so the MCP server sees exactly which command failed and what it printed.
+3. `NetctlService` adds the returned records to the MCP server's trace. `mcp_server/tools.py` then writes the policy-audit `outcome` with a `commands` summary (seq, argv, exit code). The full output stays in the root-side command log and is linked by `seq`.
+4. One request ID, assigned by the policy guard, ties together the policy decision and outcome (`policy_audit.jsonl`), every command record (`commands.jsonl`), and the service audit entry (`audit.log`, `details.request_id`).
+
+If the command log can't be written, the command has already run. Its result is still returned, with a `log_error` field, and a warning goes to stderr. A logging failure never hides what happened.
 
 | Piece | File in repo | Installed as |
 |---|---|---|

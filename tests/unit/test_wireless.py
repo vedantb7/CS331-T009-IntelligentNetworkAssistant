@@ -8,6 +8,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WORKSPACE_DIR = os.path.dirname(BASE_DIR)
@@ -369,7 +370,8 @@ class TestWirelessSuite(unittest.TestCase):
             wireless.DENY_MAC_FILE = self.deny_file
             wireless._default_runner = self.runner
             netctl.load_state = lambda *a, **kw: state_data
-            netctl.reconcile(deny_file=self.deny_file)
+            with mock.patch.dict(os.environ, {"INA_COMMAND_LOG": os.path.join(os.path.dirname(self.deny_file), "commands.jsonl")}):
+                netctl.reconcile(deny_file=self.deny_file, runner=self.runner)
 
             deny_macs = read_deny_file(self.deny_file)
             self.assertIn("3a:1f:9c:22:7e:10", deny_macs)

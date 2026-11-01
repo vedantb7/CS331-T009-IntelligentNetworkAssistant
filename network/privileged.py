@@ -17,6 +17,13 @@ and turns the JSON envelope printed by 'ina-netctl --json' back into the
 typed result model, or re-raises the same service error class (so the MCP
 tools keep reporting "Denied" vs "Failed" correctly).
 
+The command output comes back too: the envelope's 'commands' (argv, exit code,
+stdout, stderr, duration of every nft/tc/hostapd_cli call, already written to
+the root-side command log) is added to the current request trace
+(network/command_log.py), on success and on error alike. The request ID the
+MCP policy guard assigned is passed as '--request-id', so the policy audit,
+the command log and the service audit share it.
+
 The role passed is the one the MCP server's policy guard resolved from the
 caller's token; it is never taken from the AI.
 
@@ -43,6 +50,7 @@ from inav2.mcp_server.schemas import (
     UnbanResult,
     UnblockResult,
 )
+from inav2.network.command_log import add_to_trace, current_request_id, new_request_id
 from inav2.network.service import (
     ClientNotFoundError,
     INAError,
@@ -105,8 +113,10 @@ class NetctlService:
 
     def _invoke(self, role: str, command: str, positionals: List[str],
                 options: Optional[List[str]] = None) -> Dict[str, Any]:
+        request_id = current_request_id() or new_request_id()
         # '--' keeps client/target values from ever being parsed as options.
-        argv = [*self.command, "--json", "--role", role, command, *(options or []), "--", *positionals]
+        argv = [*self.command, "--json", "--request-id", request_id, "--role", role,
+                command, *(options or []), "--", *positionals]
         code, stdout, stderr = self.runner(argv, self.timeout)
         try:
             envelope = json.loads(stdout.strip().splitlines()[-1]) if stdout.strip() else None
@@ -115,6 +125,9 @@ class NetctlService:
         if not isinstance(envelope, dict) or "ok" not in envelope:
             detail = (stderr or stdout).strip() or f"exit code {code}"
             raise KernelMutationError(f"ina-netctl did not return a result ({detail}).")
+        commands = envelope.get("commands")
+        if isinstance(commands, list):
+            add_to_trace(commands)
         if envelope["ok"]:
             return envelope.get("result") or {}
         error_cls = _ERRORS.get(str(envelope.get("error")), KernelMutationError)

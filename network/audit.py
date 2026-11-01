@@ -13,6 +13,8 @@ import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from inav2.network.command_log import current_request_id
+
 GENESIS_HASH = "0" * 64
 DEFAULT_AUDIT_LOG = "/var/log/ina/audit.log"
 TMP_AUDIT_LOG = "/tmp/ina/audit.log"
@@ -108,6 +110,11 @@ def append_audit_entry(
     """
     path = _get_log_path(log_path)
     last_entry = get_last_audit_entry(path)
+
+    # Correlate with the policy decision and the command log (same request ID).
+    request_id = current_request_id()
+    if request_id and "request_id" not in details:
+        details = {**details, "request_id": request_id}
 
     if last_entry:
         sequence = last_entry.get("sequence", 0) + 1

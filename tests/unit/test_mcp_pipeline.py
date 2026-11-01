@@ -13,6 +13,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 MCP_AVAILABLE = importlib.util.find_spec("mcp") is not None
 
@@ -48,11 +49,14 @@ class TestMcpPipelineInProcess(unittest.TestCase):
         )
         self._old_token = os.environ.get(TOKEN_ENV)
         os.environ[TOKEN_ENV] = "operator-token"
+        self._env = mock.patch.dict(os.environ, {"INA_COMMAND_LOG": os.path.join(self.tmp, "commands.jsonl")})
+        self._env.start()
         self.transport = McpTransport(server=server.mcp)
         self.assistant = NetworkAssistant(transport=self.transport, backend=RuleBasedBackend())
 
     def tearDown(self) -> None:
         self.transport.close()
+        self._env.stop()
         tools._guard = None
         if self._old_token is None:
             os.environ.pop(TOKEN_ENV, None)

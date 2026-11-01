@@ -8,8 +8,14 @@ server reaches it through 'network/privileged.py' (NetctlService), which calls
 'sudo -n ina-netctl --json --role <role> <command> -- <args>' and parses the
 JSON envelope printed on stdout:
 
-    {"ok": true,  "result": {...}}                          exit 0
-    {"ok": false, "error": "<ErrorClass>", "message": "..."} exit 1
+    {"ok": true,  "request_id": "...", "result": {...}, "commands": [...]}   exit 0
+    {"ok": false, "request_id": "...", "error": "<ErrorClass>", "message": "...",
+     "commands": [...]}                                                     exit 1
+
+'commands' holds every command run for the request (argv, exit code, stdout,
+stderr, duration), each also appended to the command log as it finishes
+(network/command_log.py), so the output returns to the MCP server while it is
+being logged.
 
 Also used by 'ina-reconcile.service' to restore state on boot and by
 'ina-expire.service' to lift expired bans.
@@ -29,6 +35,14 @@ from inav2.network.access_control import (
     validate_client_identifier,
     validate_target_identifier,
 )
+from inav2.network.command_log import (
+    RecordingRunner,
+    current_request_id,
+    ensure_recording,
+    new_request_id,
+    request_scope,
+    valid_request_id,
+)
 from inav2.network.bandwidth import (
     apply_bandwidth_limit,
     ensure_tc_infrastructure,
@@ -47,8 +61,18 @@ from inav2.network.wireless import (
 ROLES = ("admin", "operator", "viewer")
 
 
-def reconcile(deny_file: Optional[str] = None) -> int:
+def reconcile(deny_file: Optional[str] = None, runner=None) -> int:
     """Restore desired blocks, rate limits, and MAC bans from state.json on system boot."""
+    with request_scope(f"reconcile-{new_request_id()}"):
+        return _reconcile(deny_file, RecordingRunner(runner or _system_runner()))
+
+
+def _system_runner():
+    from inav2.network.device_discovery import default_command_runner
+    return default_command_runner
+
+
+def _reconcile(deny_file: Optional[str], run) -> int:
     state = load_state()
     blocks: List[dict] = state.get("blocks", [])
     limits: List[dict] = state.get("limits", [])
@@ -57,7 +81,7 @@ def reconcile(deny_file: Optional[str] = None) -> int:
     print(f"Reconciling INA network state: {len(blocks)} blocks, {len(limits)} limits, {len(bans)} bans...")
 
     # 1. Re-initialize nftables table and sets
-    ensure_ina_filter_table()
+    ensure_ina_filter_table(runner=run)
 
     # 2. Re-apply block rules
     for b in blocks:
@@ -66,20 +90,20 @@ def reconcile(deny_file: Optional[str] = None) -> int:
         if client_ip and target:
             try:
                 t_type, t_val = validate_target_identifier(target, client_ip)
-                apply_block_rule(client_ip, t_type, t_val)
+                apply_block_rule(client_ip, t_type, t_val, runner=run)
                 print(f"  Restored block: {client_ip} -> {target}")
             except Exception as e:
                 print(f"  Warning: failed to restore block {client_ip} -> {target}: {e}", file=sys.stderr)
 
     # 3. Re-initialize tc infrastructure and limits
-    ensure_tc_infrastructure()
+    ensure_tc_infrastructure(runner=run)
     for l in limits:
         client_ip = l.get("client_ip")
         down = l.get("download_kbit")
         up = l.get("upload_kbit")
         if client_ip and down and up:
             try:
-                apply_bandwidth_limit(client_ip, down, up)
+                apply_bandwidth_limit(client_ip, down, up, runner=run)
                 print(f"  Restored limit: {client_ip} -> {down}k down / {up}k up")
             except Exception as e:
                 print(f"  Warning: failed to restore limit {client_ip}: {e}", file=sys.stderr)
@@ -97,7 +121,7 @@ def reconcile(deny_file: Optional[str] = None) -> int:
         print(f"  Warning: failed to write deny file: {e}", file=sys.stderr)
 
     for b in active:
-        ok, err = deny_acl_add(b["mac"])
+        ok, err = deny_acl_add(b["mac"], runner=run)
         if ok:
             print(f"  Restored ban: {b['mac']} ({b.get('client')})")
         else:
@@ -157,6 +181,9 @@ def main(args: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="ina-netctl", description="INA Network Control CLI")
     parser.add_argument("--json", action="store_true",
                         help="Print a JSON envelope ({ok, result} or {ok, error, message}) on stdout")
+    parser.add_argument("--request-id", default=None,
+                        help="Correlation ID from the MCP policy guard ([A-Za-z0-9_-], max 64); "
+                             "stamped on every command-log and audit record of this run")
     parser.add_argument("--role", choices=ROLES, default="admin",
                         help="Role whose rules the service layer applies (default: admin, "
                              "for the root administrator; the MCP server passes the role "
@@ -218,17 +245,25 @@ def main(args: Optional[List[str]] = None) -> int:
     if parsed.command == "reconcile":
         return reconcile()
 
-    try:
-        res = _run_command(parsed)
-    except Exception as err:
-        if parsed.json:
-            print(json.dumps({"ok": False, "error": type(err).__name__, "message": str(err)}))
-        else:
-            print(f"Error: {err}", file=sys.stderr)
-        return 1
+    if parsed.request_id is not None and valid_request_id(parsed.request_id) is None:
+        parser.error("--request-id must match [A-Za-z0-9_-]{1,64}")
+
+    with request_scope(parsed.request_id) as trace:
+        ensure_recording(default_service)
+        envelope = {"request_id": current_request_id(), "commands": trace}
+        try:
+            res = _run_command(parsed)
+        except Exception as err:
+            if parsed.json:
+                envelope.update(ok=False, error=type(err).__name__, message=str(err))
+                print(json.dumps(envelope))
+            else:
+                print(f"Error: {err}", file=sys.stderr)
+            return 1
 
     if parsed.json:
-        print(json.dumps({"ok": True, "result": _result_dict(res)}))
+        envelope.update(ok=True, result=_result_dict(res))
+        print(json.dumps(envelope))
     elif parsed.command in ("expire", "expire-bans"):
         print(f"Expired {res['expired']} ban(s).")
     else:

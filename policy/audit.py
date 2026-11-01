@@ -161,14 +161,26 @@ class AuditLog:
         })
 
     def log_outcome(self, request_id: str, status: str, detail: str = "",
-                    verification_passed: Optional[bool] = None) -> None:
-        self._append({
+                    verification_passed: Optional[bool] = None,
+                    commands: Optional[List[Mapping[str, Any]]] = None) -> None:
+        record: Dict[str, Any] = {
             "event": "outcome",
             "request_id": clean_for_log(request_id, 40),
             "status": status if status in OUTCOME_STATUSES else "failure",
             "detail": clean_for_log(detail, 300),
             "verification_passed": verification_passed,
-        })
+        }
+        if commands is not None:
+            # Summary only (seq, argv, exit code); full output is in the command log.
+            record["commands"] = [
+                {
+                    "seq": c.get("seq") if isinstance(c.get("seq"), int) else None,
+                    "argv": [clean_for_log(a, 80) for a in list(c.get("argv") or [])[:16]],
+                    "exit_code": c.get("exit_code") if isinstance(c.get("exit_code"), int) else None,
+                }
+                for c in commands[:50] if isinstance(c, Mapping)
+            ]
+        self._append(record)
 
     # -- reading -----------------------------------------------------------
     def read_all(self) -> List[Dict[str, Any]]:

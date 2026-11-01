@@ -21,7 +21,11 @@ Every call passes through the same server-side pipeline before anything runs:
    The unprivileged server never executes it itself: 'default_service' is a
    NetctlService, which hands it to the root-only 'sudo ina-netctl' boundary,
    where the authoritative service layer ('network.service') executes it.
-4. The outcome is recorded against the same request ID.
+4. The command output comes back to this server: every nft/tc/hostapd_cli
+   call the request caused (argv, exit code, output) is returned in a trace,
+   while the same records are written to the root-side command log as they
+   run. The outcome, with a summary of that trace, is recorded in the policy
+   audit log under the same request ID.
 
 Service errors are raised as ToolError so MCP transmits them as actionable
 'isError: true' results. The message starts with "Denied" when nothing was
@@ -50,6 +54,7 @@ from inav2.mcp_server.schemas import (
     UnbanResult,
     UnblockResult,
 )
+from inav2.network.command_log import ensure_recording, request_scope, summarize
 from inav2.network.privileged import default_executor
 from inav2.network.service import (
     INAError,
@@ -108,19 +113,25 @@ def _execute(
         decision = result.decision
         raise ToolError(f"Denied by policy [{decision.rule}]: {decision.reason}")
 
-    try:
-        out = action(result.role)
-    except INAError as err:
+    # Direct (root/dev) executors record here; a NetctlService gets its records
+    # back from ina-netctl. Either way they land in 'trace'.
+    ensure_recording(default_service)
+    with request_scope(result.request_id) as trace:
         try:
-            guard.record_outcome(result, "failure", str(err), verification_passed=False)
-        except AuditError:
-            pass
-        raise ToolError(_error_text(err)) from err
+            out = action(result.role)
+        except INAError as err:
+            try:
+                guard.record_outcome(result, "failure", str(err), verification_passed=False,
+                                     commands=summarize(trace))
+            except AuditError:
+                pass
+            raise ToolError(_error_text(err)) from err
 
     status = "preview" if getattr(out, "preview", False) else "success"
     try:
         guard.record_outcome(result, status, getattr(out, "message", None) or "",
-                             verification_passed=getattr(out, "verified", None))
+                             verification_passed=getattr(out, "verified", None),
+                             commands=summarize(trace))
     except AuditError:
         pass
     return out
