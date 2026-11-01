@@ -292,7 +292,6 @@ if PYDANTIC_AVAILABLE:
             Annotated[
                 str,
                 Field(
-                    default=None,
                     pattern=CLIENT_REGEX,
                     description="Optional client reservation name or IP to filter status.",
                 ),
@@ -328,7 +327,6 @@ if PYDANTIC_AVAILABLE:
             Annotated[
                 int,
                 Field(
-                    default=None,
                     ge=1,
                     le=MAX_BAN_MINUTES,
                     description="Ban duration in minutes (1 to 10080), or None for permanent ban.",
@@ -339,7 +337,6 @@ if PYDANTIC_AVAILABLE:
             Annotated[
                 str,
                 Field(
-                    default=None,
                     pattern=REASON_REGEX,
                     description="Optional short reason (up to 120 chars).",
                 ),

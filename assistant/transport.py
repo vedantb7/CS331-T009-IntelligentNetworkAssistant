@@ -1,14 +1,18 @@
 """Transport layer: how the assistant sends a tool call and gets a result.
 
-Two transports share one interface:
+All transports share one interface:
 
 - :class:`MockTransport`: a self-contained, in-memory stand-in for the whole
   server side (role check -> policy -> apply -> verify). It lets the assistant
   run end-to-end on a laptop today, before Dhruv's MCP server and Ananya's
   policy engine exist. This is what milestone M1 in the plan needs, and what
   the evaluation harness runs against.
-- :class:`HttpTransport`: a thin client for Dhruv's real FastMCP server, used
-  once it is up. It sends the same :class:`ToolCall` and expects the same
+- :class:`McpTransport`: the real path. Speaks the Model Context Protocol to
+  the INA MCP server (``mcp_server/``) with the official MCP Python SDK, so
+  every call goes through the server's schema validation and policy guard
+  before any command runs.
+- :class:`HttpTransport`: a thin client for an HTTP endpoint (placeholder).
+  It sends the same :class:`ToolCall` and expects the same
   :class:`ToolResult` shape, so nothing else in the assistant changes.
 
 The mock deliberately mirrors the real design: it knows a device list with
@@ -22,9 +26,16 @@ real engine and must be kept consistent with ``policy/rules.yaml``.
 
 from __future__ import annotations
 
+import atexit
+import contextlib
 import json
+import os
+import re
+import shlex
+import sys
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from assistant.contract import (
@@ -359,6 +370,225 @@ class HttpTransport(Transport):
                                     token="operator-token"))
         rows = result.data.get("devices", [])
         return [r.get("name") for r in rows if r.get("name")]
+
+
+# ---------------------------------------------------------------------------
+# MCP Transport (official MCP Python SDK)
+# ---------------------------------------------------------------------------
+
+# Earlier draft names an LLM backend may still produce.
+_MCP_ALIASES = {
+    ToolName.LIST_DEVICES.value: ToolName.GET_STATUS.value,
+    ToolName.BLOCK_DEVICE.value: ToolName.BLOCK_CLIENT.value,
+}
+
+# Directory containing the 'inav2' package, so 'python -m inav2.mcp_server.server' resolves.
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+
+# The role token travels as a connection credential in the server's environment.
+MCP_TOKEN_ENV = "INA_ROLE_TOKEN"
+
+_SDK_ERROR_PREFIX = re.compile(r"^Error executing tool [\w.-]+: ")
+_POLICY_DENIAL = re.compile(r"^Denied by policy \[([\w-]+)\]: ")
+
+
+def _tidy_tool_error(text: str) -> str:
+    """Shorten the SDK's pydantic input-validation text to 'field: problem; ...'."""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    if not lines or "validation error" not in lines[0]:
+        return text.strip()
+    problems = []
+    body = [l for l in lines[1:] if not l.startswith("For further information")]
+    for field_name, message in zip(body[0::2], body[1::2]):
+        problems.append(f"{field_name}: {message.split(' [type=')[0]}")
+    return "Invalid arguments: " + "; ".join(problems) if problems else text.strip()
+
+
+class McpTransport(Transport):
+    """Client for the INA MCP server, using the official MCP Python SDK.
+
+    Connects with ``mcp.Client`` (protocol 2026-07-28, ``server/discover`` with
+    legacy fallback), reads the tool definitions once via ``tools/list``, and
+    sends each :class:`ToolCall` as a ``tools/call`` request. The server then
+    validates the arguments against the published inputSchema, runs the policy
+    guard, and only then executes the command.
+
+    By default the server is launched locally as a stdio subprocess
+    (``python -m inav2.mcp_server.server``). Pass ``command`` to launch it
+    elsewhere, e.g. ``"ssh ina@ina-router"`` with the Pi's authorized_keys
+    forcing the server command. Pass ``server`` to connect to an in-process
+    ``MCPServer`` (tests).
+
+    The role token is a connection credential, not a tool argument: for stdio
+    the MCP specification says credentials come from the environment, so it is
+    handed to the server process as ``INA_ROLE_TOKEN``.
+    """
+
+    def __init__(self,
+                 token: Optional[str] = None,
+                 command: Optional[str] = None,
+                 server: Any = None,
+                 timeout: float = 30.0) -> None:
+        try:
+            from anyio.from_thread import start_blocking_portal
+            from mcp import Client
+            from mcp.client.stdio import StdioServerParameters
+        except ImportError as err:
+            raise RuntimeError(
+                "The MCP Python SDK is not installed; run 'pip install -r requirements.txt'."
+            ) from err
+
+        if server is None:
+            argv = shlex.split(command) if command else [sys.executable, "-m", "inav2.mcp_server.server"]
+            # The SDK gives the child only a minimal default environment, so
+            # forward the INA settings (policy files, demo tokens, ...) explicitly.
+            env = {k: v for k, v in os.environ.items() if k.startswith("INA_")}
+            if token:
+                env[MCP_TOKEN_ENV] = token
+            server = StdioServerParameters(command=argv[0], args=argv[1:], env=env,
+                                           cwd=str(_PROJECT_ROOT))
+
+        self._closed = False
+        self._client_cm = None
+        # The assistant is synchronous; a blocking portal runs the async SDK
+        # client on its own event-loop thread and keeps one session open.
+        self._portal_cm = start_blocking_portal()
+        self._portal = self._portal_cm.__enter__()
+        try:
+            client_cm = self._portal.wrap_async_context_manager(
+                Client(server, read_timeout_seconds=timeout))
+            self._client = client_cm.__enter__()
+            self._client_cm = client_cm
+            listed = self._portal.call(self._client.list_tools)
+        except BaseException:
+            self.close()
+            raise
+        self.tools = {tool.name: tool for tool in listed.tools}
+        atexit.register(self.close)
+
+    def close(self) -> None:
+        """End the MCP session and stop the server subprocess."""
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._client_cm is not None:
+                with contextlib.suppress(Exception):
+                    self._client_cm.__exit__(None, None, None)
+        finally:
+            self._portal_cm.__exit__(None, None, None)
+
+    # -- request side --------------------------------------------------------
+    def _arguments(self, name: str, call: ToolCall) -> Dict[str, Any]:
+        """Map the assistant's arguments onto the tool's published inputSchema."""
+        given = dict(call.arguments or {})
+        if "client" not in given and given.get("device"):
+            given["client"] = given["device"]
+        if name == ToolName.LIMIT_BANDWIDTH.value and isinstance(given.get("mbit"), (int, float)):
+            kbit = int(round(float(given["mbit"]) * 1000))
+            given.setdefault("download_kbit", kbit)
+            given.setdefault("upload_kbit", kbit)
+        if name == ToolName.BAN_CLIENT.value and "minutes" in given:
+            given.setdefault("duration_minutes", given["minutes"])
+        if name in (ToolName.BLOCK_CLIENT.value, ToolName.UNBLOCK_CLIENT.value):
+            given.setdefault("target", "all")
+        # Send only what the tool declares: the server would silently ignore extras.
+        properties = (self.tools[name].input_schema or {}).get("properties", {})
+        return {k: v for k, v in given.items() if k in properties and v is not None}
+
+    def call(self, request: ToolCall) -> ToolResult:
+        name = _MCP_ALIASES.get(request.tool, request.tool)
+        if name == ToolName.RESTORE_DEVICE.value:
+            return self._restore(request)
+        return self._call_tool(name, request)
+
+    def _call_tool(self, name: str, request: ToolCall) -> ToolResult:
+        if name not in self.tools:
+            reason = f"The server has no tool named '{name}'."
+            return ToolResult(status="denied", tool=request.tool, request_id=request.request_id,
+                              decision=Decision("DENY", reason, "R-unknown-tool"), detail=reason)
+        arguments = self._arguments(name, request)
+        result = self._portal.call(self._client.call_tool, name, arguments)
+        return self._to_tool_result(request, name, arguments, result)
+
+    def _restore(self, request: ToolCall) -> ToolResult:
+        """restore_device = unblock everything, then remove any bandwidth limit."""
+        unblocked = self._call_tool(ToolName.UNBLOCK_CLIENT.value, request)
+        if unblocked.status != "success":
+            return unblocked
+        unlimited = self._call_tool(ToolName.REMOVE_BANDWIDTH_LIMIT.value, request)
+        if unlimited.status == "success":
+            unlimited.detail = f"{unblocked.detail} {unlimited.detail}"
+        return unlimited
+
+    # -- result side ---------------------------------------------------------
+    @staticmethod
+    def _to_tool_result(request: ToolCall, name: str, arguments: Dict[str, Any],
+                        result: Any) -> ToolResult:
+        device = arguments.get("client")
+        if result.is_error:
+            text = " ".join(getattr(block, "text", "") for block in result.content)
+            reason = _SDK_ERROR_PREFIX.sub("", text.strip())
+            rule = None
+            denial = _POLICY_DENIAL.match(reason)
+            if denial:
+                rule, reason = denial.group(1), reason[denial.end():]
+            failed = reason.startswith("Failed: ")
+            if reason.startswith(("Denied: ", "Failed: ")):
+                reason = reason.split(": ", 1)[1]
+            reason = _tidy_tool_error(reason)
+            if failed:
+                # Allowed, but the command or its read-back failed (server rolled back where it can).
+                return ToolResult(
+                    status="failure", tool=request.tool, request_id=request.request_id,
+                    device=device, decision=Decision("ALLOW", "Permitted by server policy."),
+                    detail=reason,
+                )
+            return ToolResult(status="denied", tool=request.tool, request_id=request.request_id,
+                              device=device, decision=Decision("DENY", reason, rule), detail=reason)
+
+        data: Dict[str, Any] = dict(result.structured_content or {})
+        if name == ToolName.GET_STATUS.value:
+            data["devices"] = [
+                {
+                    "name": c.get("client"),
+                    "ip": c.get("ip"),
+                    "associated": c.get("associated"),
+                    "blocked": c.get("blocked_targets", []),
+                    "download_kbit": c.get("download_kbit"),
+                    "upload_kbit": c.get("upload_kbit"),
+                    "banned": c.get("banned", False),
+                }
+                for c in data.get("clients", [])
+            ]
+        verified = data.get("verified")
+        status = "success"
+        if data.get("preview") or data.get("requires_confirmation"):
+            status = "preview"
+        elif verified is False:
+            status = "failure"
+        verification = None
+        if verified is not None:
+            verification = Verification(
+                passed=bool(verified),
+                expected="requested state",
+                measured="read back from kernel state" if verified else "kernel state did not match",
+            )
+        return ToolResult(
+            status=status, tool=request.tool, request_id=request.request_id, device=device,
+            decision=Decision("ALLOW", "Permitted by server policy."),
+            verification=verification,
+            detail=data.get("message") or f"{name} completed.",
+            data=data,
+        )
+
+    def device_names(self) -> List[str]:
+        """Names reported by the server's get_status tool."""
+        status = self._call_tool(ToolName.GET_STATUS.value,
+                                 ToolCall(tool=ToolName.GET_STATUS.value))
+        if status.status != "success":
+            return []
+        return [r["name"] for r in status.data.get("devices", []) if r.get("name")]
 
 
 # ---------------------------------------------------------------------------

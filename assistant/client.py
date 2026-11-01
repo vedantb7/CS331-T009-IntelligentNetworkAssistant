@@ -152,8 +152,13 @@ class NetworkAssistant:
                     state.append("blocked")
                 if r.get("limit_mbit"):
                     state.append(f"limited to {r['limit_mbit']:g} Mbit/s")
+                elif r.get("download_kbit"):
+                    state.append(f"limited to {r['download_kbit'] / 1000:g} Mbit/s")
+                if r.get("banned"):
+                    state.append("banned")
                 tag = f" ({', '.join(state)})" if state else ""
-                lines.append(f"  - {r['name']} [{r['class']}]{tag}")
+                cls = f" [{r['class']}]" if r.get("class") else ""
+                lines.append(f"  - {r['name']}{cls}{tag}")
             return "Devices on the network:\n" + "\n".join(lines)
         v = result.verification
         proof = ""
@@ -254,6 +259,12 @@ def _result_to_dict(result: ToolResult) -> Dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def _build_transport(args: argparse.Namespace) -> Transport:
+    if args.server == "mcp":
+        # Real pipeline: MCP client -> INA MCP server (validation + policy) -> command.
+        # No silent fallback to the mock: a failure here must be visible.
+        from assistant.transport import McpTransport
+        return McpTransport(token=ROLE_TOKENS.get(args.role, "operator-token"),
+                            command=args.mcp_command or None)
     if args.server == "service":
         # Connect directly to the local NetworkService (on Pi)
         try:
@@ -271,6 +282,8 @@ def _build_transport(args: argparse.Namespace) -> Transport:
 def _print_banner(assistant: NetworkAssistant) -> None:
     backend = assistant.backend.name
     kind = "mock network" if isinstance(assistant.transport, MockTransport) else "live server"
+    if type(assistant.transport).__name__ == "McpTransport":
+        kind = "INA MCP server"
     print("=" * 60)
     print("INA v2 - Operator Assistant")
     print(f"  Role:      {assistant.role}")
@@ -298,8 +311,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--role", choices=list(ROLE_TOKENS), default="operator",
                         help="Role to act as (default: operator).")
     parser.add_argument("--server", default=os.environ.get("INA_SERVER", ""),
-                        help="Base URL of Dhruv's MCP server. If omitted, uses "
+                        help="'mcp' to use the INA MCP server (stdio), 'service' for the "
+                        "local service layer, or an HTTP base URL. If omitted, uses "
                         "the built-in mock network.")
+    parser.add_argument("--mcp-command", default=os.environ.get("INA_MCP_COMMAND", ""),
+                        help="With --server mcp: command that starts the MCP server on "
+                        "stdio (default: python -m inav2.mcp_server.server; e.g. "
+                        "'ssh ina@ina-router').")
     parser.add_argument("--no-llm", action="store_true",
                         help="Force the rule-based parser even if an API key is set.")
     parser.add_argument("--transcript", default="",

@@ -233,6 +233,22 @@ def _require_writes_enabled() -> None:
         raise PolicyDeniedError("Write operations are disabled on this server (INA_ALLOW_WRITE != 1).")
 
 
+def _find_ban(state: Dict[str, Any], client: str) -> Optional[Dict[str, Any]]:
+    """Return the stored ban whose name, IP or MAC matches client, if any."""
+    ident = client.strip().lower()
+    return next(
+        (
+            b for b in state.get("bans", [])
+            if ident in (
+                (b.get("client") or "").lower(),
+                (b.get("client_ip") or "").lower(),
+                (b.get("mac") or "").lower(),
+            )
+        ),
+        None,
+    )
+
+
 # ==============================================================================
 # Temporary Policy Evaluation Placeholder
 # ==============================================================================
@@ -759,6 +775,11 @@ class NetworkService:
                 message=f"Banned '{station.name}' ({station.mac}) {exp_desc}. Verified: in hostapd deny ACL, in deny file, station gone.",
             )
 
+    def ban_owner_role(self, client: str) -> Optional[str]:
+        """Role that created the stored ban matching client (name, IP or MAC), or None."""
+        ban = _find_ban(load_state(self.state_path), client)
+        return ban.get("banned_by_role") if ban else None
+
     def unban(self, client: str, role: str = "operator") -> UnbanResult:
         """Remove a MAC ban from the Wi-Fi AP."""
         try:
@@ -768,17 +789,7 @@ class NetworkService:
         self._require_writes_enabled()
 
         state = load_state(self.state_path)
-        existing_ban = next(
-            (
-                b for b in state.get("bans", [])
-                if args.client.lower() in (
-                    (b.get("client") or "").lower(),
-                    (b.get("client_ip") or "").lower(),
-                    (b.get("mac") or "").lower(),
-                )
-            ),
-            None,
-        )
+        existing_ban = _find_ban(state, args.client)
         banned_by = existing_ban.get("banned_by_role") if existing_ban else None
 
         try:

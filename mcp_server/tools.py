@@ -1,21 +1,35 @@
 """Tool definitions exposed through the MCP server in INA v2.
 
-Implements the five canonical MCP tools:
+Implements the eight canonical MCP tools:
 - block_client(client, target)
 - unblock_client(client, target)
 - limit_bandwidth(client, download_kbit, upload_kbit)
 - remove_bandwidth_limit(client)
 - get_status(client?)
+- kick_client(client)
+- ban_client(client, duration_minutes?, reason?, confirm?)
+- unban_client(client)
 
-Delegates all execution to the authoritative service layer ('network.service').
-Converts service errors into ToolError exceptions so MCP transmits them as
-actionable 'isError: true' results per specification.
+Every call passes through the same server-side pipeline before anything runs:
+1. The MCP SDK has already checked the arguments against the tool's inputSchema
+   (patterns and ranges declared in server.py); bad input never reaches here.
+2. PolicyGuard.check(): role token -> role -> policy engine -> decision written
+   to the policy audit log. It fails closed. The token is a connection
+   credential taken from the server's environment (INA_ROLE_TOKEN), as the MCP
+   spec prescribes for stdio; the AI never supplies or chooses a role.
+3. Only if allowed: the authoritative service layer ('network.service') runs
+   the command, using the role the token resolved to.
+4. The outcome is recorded against the same request ID.
+
+Service errors are raised as ToolError so MCP transmits them as actionable
+'isError: true' results. The message starts with "Denied" when nothing was
+executed and "Failed" when the change itself or its verification failed.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional
+from typing import Any, Callable, Dict, Mapping, Optional, TypeVar
 
 try:
     from mcp.server.mcpserver.exceptions import ToolError
@@ -36,30 +50,89 @@ from inav2.mcp_server.schemas import (
 )
 from inav2.network.service import (
     INAError,
+    KernelMutationError,
+    LockTimeoutError,
+    VerificationError,
+    WirelessControlError,
     default_service,
 )
+from inav2.policy.audit import AuditError
+from inav2.policy.authorization import AuthConfigError
+from inav2.policy.config import PolicyConfigError
+from inav2.policy.guard import PolicyGuard
+
+T = TypeVar("T")
+
+# Environment variable carrying the caller's role token (stdio credential).
+TOKEN_ENV = "INA_ROLE_TOKEN"
+
+# Errors raised after the command started; everything else means nothing ran.
+_FAILED_ERRORS = (KernelMutationError, LockTimeoutError, VerificationError, WirelessControlError)
+
+_guard: Optional[PolicyGuard] = None
 
 
-def get_current_role() -> str:
-    """Retrieve the caller role from the execution environment."""
-    return os.environ.get("INA_ROLE", "operator").strip().lower()
+def get_guard() -> PolicyGuard:
+    """Return the shared PolicyGuard, loading policy files and token hashes on first use."""
+    global _guard
+    if _guard is None:
+        try:
+            _guard = PolicyGuard.from_config()
+        except (AuthConfigError, PolicyConfigError) as err:
+            raise ToolError(f"Denied: the server's policy is not configured ({err}).") from err
+    return _guard
+
+
+def _error_text(err: INAError) -> str:
+    prefix = "Failed" if isinstance(err, _FAILED_ERRORS) else "Denied"
+    return f"{prefix}: {err}"
+
+
+def _execute(
+    tool: str,
+    arguments: Dict[str, Any],
+    action: Callable[[str], T],
+    context: Optional[Mapping[str, Any]] = None,
+) -> T:
+    """Authorize one tool call with the policy guard, then run it with the resolved role."""
+    guard = get_guard()
+    result = guard.check(os.environ.get(TOKEN_ENV, ""), tool, arguments, context=context)
+    if not result.allowed:
+        decision = result.decision
+        raise ToolError(f"Denied by policy [{decision.rule}]: {decision.reason}")
+
+    try:
+        out = action(result.role)
+    except INAError as err:
+        try:
+            guard.record_outcome(result, "failure", str(err), verification_passed=False)
+        except AuditError:
+            pass
+        raise ToolError(_error_text(err)) from err
+
+    status = "preview" if getattr(out, "preview", False) else "success"
+    try:
+        guard.record_outcome(result, status, getattr(out, "message", None) or "",
+                             verification_passed=getattr(out, "verified", None))
+    except AuditError:
+        pass
+    return out
 
 
 def block_client(client: str, target: str) -> BlockResult:
     """Block IPv4 traffic between a client and a target without disconnecting the client.
 
     Args:
-        client: Client reservation name (e.g. 'laptop-a') or IPv4 in 192.168.50.0/24.
+        client: Client reservation name (e.g. 'guest-phone') or IPv4 in 192.168.50.0/24.
         target: Another client (name or IP), or scope keyword: 'gateway', 'internet', or 'all'.
 
     Returns:
         BlockResult containing post-action state and verification confirmation.
     """
-    try:
-        role = get_current_role()
-        return default_service.block(client=client, target=target, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
+    return _execute(
+        "block_client", {"client": client, "target": target},
+        lambda role: default_service.block(client=client, target=target, role=role),
+    )
 
 
 def unblock_client(client: str, target: str) -> UnblockResult:
@@ -72,11 +145,10 @@ def unblock_client(client: str, target: str) -> UnblockResult:
     Returns:
         UnblockResult confirming removal and verification.
     """
-    try:
-        role = get_current_role()
-        return default_service.unblock(client=client, target=target, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
+    return _execute(
+        "unblock_client", {"client": client, "target": target},
+        lambda role: default_service.unblock(client=client, target=target, role=role),
+    )
 
 
 def limit_bandwidth(client: str, download_kbit: int, upload_kbit: int) -> LimitResult:
@@ -90,13 +162,13 @@ def limit_bandwidth(client: str, download_kbit: int, upload_kbit: int) -> LimitR
     Returns:
         LimitResult containing applied rates and verification state.
     """
-    try:
-        role = get_current_role()
-        return default_service.limit(
+    return _execute(
+        "limit_bandwidth",
+        {"client": client, "download_kbit": download_kbit, "upload_kbit": upload_kbit},
+        lambda role: default_service.limit(
             client=client, download_kbit=download_kbit, upload_kbit=upload_kbit, role=role
-        )
-    except INAError as err:
-        raise ToolError(str(err)) from err
+        ),
+    )
 
 
 def remove_bandwidth_limit(client: str) -> RemoveLimitResult:
@@ -108,11 +180,10 @@ def remove_bandwidth_limit(client: str) -> RemoveLimitResult:
     Returns:
         RemoveLimitResult confirming limit removal.
     """
-    try:
-        role = get_current_role()
-        return default_service.remove_limit(client=client, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
+    return _execute(
+        "remove_bandwidth_limit", {"client": client},
+        lambda role: default_service.remove_limit(client=client, role=role),
+    )
 
 
 def get_status(client: Optional[str] = None) -> StatusResult:
@@ -124,27 +195,26 @@ def get_status(client: Optional[str] = None) -> StatusResult:
     Returns:
         StatusResult containing client list and synchronization telemetry.
     """
-    try:
-        role = get_current_role()
-        return default_service.status(client=client, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
+    arguments = {"client": client} if client else {}
+    return _execute(
+        "get_status", arguments,
+        lambda role: default_service.status(client=client, role=role),
+    )
 
 
 def kick_client(client: str) -> KickResult:
     """Deauthenticate a client from the INA Wi-Fi once (it will normally reconnect within seconds).
 
     Args:
-        client: Client reservation name (e.g. 'phone-b'), IPv4 in 192.168.50.0/24, or MAC address.
+        client: Client reservation name (e.g. 'guest-phone'), IPv4 in 192.168.50.0/24, or MAC address.
 
     Returns:
         KickResult containing deauthentication outcome and association state.
     """
-    try:
-        role = get_current_role()
-        return default_service.kick(client=client, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
+    return _execute(
+        "kick_client", {"client": client},
+        lambda role: default_service.kick(client=client, role=role),
+    )
 
 
 def ban_client(
@@ -167,17 +237,20 @@ def ban_client(
     Returns:
         BanResult containing preview or applied ban status and verification.
     """
-    try:
-        role = get_current_role()
-        return default_service.ban(
+    arguments: Dict[str, Any] = {"client": client, "duration_minutes": duration_minutes,
+                                 "confirm": confirm}
+    if reason is not None:
+        arguments["reason"] = reason
+    return _execute(
+        "ban_client", arguments,
+        lambda role: default_service.ban(
             client=client,
             duration_minutes=duration_minutes,
             reason=reason,
             confirm=confirm,
             role=role,
-        )
-    except INAError as err:
-        raise ToolError(str(err)) from err
+        ),
+    )
 
 
 def unban_client(client: str) -> UnbanResult:
@@ -189,9 +262,10 @@ def unban_client(client: str) -> UnbanResult:
     Returns:
         UnbanResult confirming ban removal from runtime ACL and deny file.
     """
-    try:
-        role = get_current_role()
-        return default_service.unban(client=client, role=role)
-    except INAError as err:
-        raise ToolError(str(err)) from err
-
+    # Trusted server-side context: who created the ban (operators may only lift their own).
+    context = {"banned_by_role": default_service.ban_owner_role(client)}
+    return _execute(
+        "unban_client", {"client": client},
+        lambda role: default_service.unban(client=client, role=role),
+        context=context,
+    )

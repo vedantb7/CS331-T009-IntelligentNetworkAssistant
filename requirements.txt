@@ -1,3 +1,7 @@
 # Intelligent Network Configuration Assistant v2 (INA v2)
-# Dependencies will be specified during subsequent implementation milestones.
-
+#
+# Core inspection modules, the policy engine and the unit tests are standard
+# library only. The MCP server (mcp_server/) and the assistant's MCP transport
+# (assistant/transport.py: McpTransport) need the official MCP Python SDK,
+# which also brings pydantic (used for tool schemas and structured results).
+mcp==2.3.0

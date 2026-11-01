@@ -11,6 +11,9 @@ requires-python = ">=3.11"
 authors = [
     { name = "INA v2 Team" }
 ]
+dependencies = [
+    "mcp==2.3.0",
+]
 
 [tool.pytest.ini_options]
 minversion = "7.0"
