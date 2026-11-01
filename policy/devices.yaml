@@ -1,9 +1,22 @@
 # Admin-owned device list: name -> MAC address -> class (and optional fixed IP).
 # Classes: protected | staff | guest | unknown
-# Replace the MACs with the real devices on the Pi network.
 # Names must match rules.yaml client_name (lower-case letters, digits, '-').
 # Devices NOT listed here can still be addressed by IP or MAC; they are then
 # treated as class "unknown".
+#
+# This file is the single source of device identity on the router:
+#   - the policy engine resolves names here;
+#   - 'sudo ina-netctl sync-devices' turns it into dnsmasq reservations
+#     (/etc/ina/dhcp-hosts), so each device's lease carries the name below,
+#     and binds every fixed 'ip' to its MAC (nftables anti-spoofing);
+#   - ina-reconcile re-binds the fixed IPs after every boot.
+#
+# BEFORE DEPLOYING: the MACs below are examples (aa:bb:cc:dd:ee:..). Replace
+# them with the real devices' MACs (phones: use the per-network "private"
+# MAC shown for the INA-Router network), keep rules.yaml protected_macs in
+# sync, then run 'sudo ina-netctl sync-devices'. sync-devices refuses to run
+# while example MACs are present. A fixed 'ip' is optional; if given it must
+# be a host in 192.168.50.0/24 (outside the .10-.100 pool is clearest).
 
 devices:
   - {name: pi-gateway,   mac: "aa:bb:cc:dd:ee:00", class: protected, ip: "192.168.50.1"}

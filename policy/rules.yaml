@@ -13,6 +13,7 @@ protected_classes: [protected]
 protected_devices: [pi-gateway, admin-laptop, probe-laptop]
 
 # MAC addresses that can never be blocked, limited, kicked or banned.
+# EXAMPLES: replace with the real MACs of the Pi's ap0 and the admin/probe laptops.
 # Also read by network/wireless.py (load_protected_macs), so keep this key and
 # keep MAC addresses out of the rest of this file.
 protected_macs:

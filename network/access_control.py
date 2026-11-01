@@ -16,6 +16,8 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import tempfile
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
 from inav2.mcp_server.schemas import (
@@ -55,54 +57,12 @@ DEFAULT_LEASES_FILE = "/var/lib/misc/dnsmasq.leases"
 
 SCOPE_TARGETS = {"internet", "gateway", "all"}
 
-# Full nftables base configuration template matching INA research specification
-NFTABLES_INIT_RULES = f"""
-table {TABLE_FAMILY} {TABLE_NAME} {{
-\tset {SET_MAC_IP_BIND} {{
-\t\ttype ether_addr . ipv4_addr
-\t}}
-\tset {SET_MANAGED_IPS} {{
-\t\ttype ipv4_addr
-\t}}
-\tset {SET_BLOCKED_PAIRS} {{
-\t\ttype ipv4_addr . ipv4_addr
-\t}}
-\tset {SET_BLOCKED_INTERNET} {{
-\t\ttype ipv4_addr
-\t}}
-\tset {SET_BLOCKED_GATEWAY} {{
-\t\ttype ipv4_addr
-\t}}
-\tset {SET_ISOLATED} {{
-\t\ttype ipv4_addr
-\t}}
-
-\tchain prerouting {{
-\t\ttype filter hook prerouting priority raw; policy accept;
-\t\tiifname "ap0" ip saddr @{SET_MANAGED_IPS} ether saddr . ip saddr != @{SET_MAC_IP_BIND} counter drop
-\t}}
-
-\tchain forward {{
-\t\ttype filter hook forward priority filter; policy accept;
-\t\tiifname "ap0" oifname "ap0" ip saddr . ip daddr @{SET_BLOCKED_PAIRS} counter reject with icmpx admin-prohibited
-\t\tiifname "ap0" oifname "ap0" ip saddr @{SET_ISOLATED} counter reject with icmpx admin-prohibited
-\t\tiifname "ap0" oifname "ap0" ip daddr @{SET_ISOLATED} counter reject with icmpx admin-prohibited
-\t\tiifname "ap0" oifname "wlan0" ip saddr @{SET_BLOCKED_INTERNET} counter reject with icmpx admin-prohibited
-\t\tiifname "ap0" oifname "wlan0" ip saddr @{SET_ISOLATED} counter reject with icmpx admin-prohibited
-\t\tiifname "wlan0" oifname "ap0" ip daddr @{SET_BLOCKED_INTERNET} counter drop
-\t\tiifname "wlan0" oifname "ap0" ip daddr @{SET_ISOLATED} counter drop
-\t\tiifname "ap0" meta nfproto ipv6 counter drop
-\t}}
-
-\tchain input {{
-\t\ttype filter hook input priority filter; policy accept;
-\t\tiifname "ap0" udp dport {{ 53, 67 }} accept
-\t\tiifname "ap0" tcp dport 53 accept
-\t\tiifname "ap0" ip saddr @{SET_BLOCKED_GATEWAY} counter reject with icmpx admin-prohibited
-\t\tiifname "ap0" ip saddr @{SET_ISOLATED} counter reject with icmpx admin-prohibited
-\t}}
-}}
-"""
+# The INA filter table (sets + prerouting/forward/input chains) lives in one
+# file, loaded at boot through /etc/nftables.conf. Installed copy first, then
+# the repository copy; INA_FILTER_FILE overrides both.
+INSTALLED_FILTER_FILE = "/etc/nftables.d/ina-filter.nft"
+REPO_FILTER_FILE = str(Path(__file__).resolve().parents[1] / "config" / "nftables" / "ina-filter.nft")
+_RESET_LINES = {f"table {TABLE_FAMILY} {TABLE_NAME}", f"delete table {TABLE_FAMILY} {TABLE_NAME}"}
 
 
 # ==============================================================================
@@ -131,6 +91,21 @@ def _load_leases_map(leases_file: Optional[str] = None) -> Dict[str, str]:
     return mapping
 
 
+def _lease_ip_for_registered_name(name: str, leases_file: Optional[str] = None) -> Optional[str]:
+    from inav2.network.device_discovery import parse_dnsmasq_leases
+    from inav2.network.devices import device_mac
+
+    mac = device_mac(name)
+    if not mac:
+        return None
+    try:
+        with open(leases_file or DEFAULT_LEASES_FILE, "r", encoding="utf-8") as f:
+            leases = parse_dnsmasq_leases(f.read())
+    except OSError:
+        return None
+    return next((l.ip_address for l in leases if l.mac_address == mac.lower()), None)
+
+
 def validate_client_identifier(
     client: str,
     leases_file: Optional[str] = None,
@@ -155,6 +130,13 @@ def validate_client_identifier(
     mapping = leases_map if leases_map is not None else _load_leases_map(leases_file)
     if client_clean in mapping:
         return mapping[client_clean]
+
+    if leases_map is None:
+        # Registered in devices.yaml but its lease still shows another hostname
+        # (e.g. not renewed since 'ina-netctl sync-devices'): match by MAC instead.
+        ip = _lease_ip_for_registered_name(client_clean, leases_file)
+        if ip:
+            return ip
 
     known = ", ".join(sorted(mapping.keys())) if mapping else "none"
     raise ValueError(f"Unknown client '{client}'. Unable to resolve to an active IP. Known clients: {known}.")
@@ -187,19 +169,46 @@ def validate_target_identifier(
 # nftables Rule Application and Management
 # ==============================================================================
 
+def filter_table_file() -> str:
+    """Path of the INA filter table definition (see config/nftables/ina-filter.nft)."""
+    custom = os.environ.get("INA_FILTER_FILE")
+    if custom:
+        return custom
+    return INSTALLED_FILTER_FILE if os.path.isfile(INSTALLED_FILTER_FILE) else REPO_FILTER_FILE
+
+
 def ensure_ina_filter_table(runner: Optional[CommandRunner] = None) -> bool:
-    """Ensure the 'inet ina_filter' table and its required sets/chains exist."""
+    """Ensure the 'inet ina_filter' table exists WITH its chains, not just its sets.
+
+    Blocking only works if the forward/input/prerouting chains reference the
+    sets, so the check is on the chain. If it is missing (fresh boot without
+    the nftables include, or a table left by an older INA that created bare
+    sets), the definition file is loaded without its reset lines: the table
+    is merged in and existing set elements are kept.
+
+    Raises RuntimeError if the definition cannot be loaded.
+    """
     run = runner or _default_runner
-    code, stdout, _ = run(["nft", "list", "table", TABLE_FAMILY, TABLE_NAME], 5.0)
+    code, _, _ = run(["nft", "list", "chain", TABLE_FAMILY, TABLE_NAME, "forward"], 5.0)
     if code == 0:
         return True
 
-    # Initialize table and sets
-    run(["nft", "add", "table", TABLE_FAMILY, TABLE_NAME], 5.0)
-    run(["nft", "add", "set", TABLE_FAMILY, TABLE_NAME, SET_BLOCKED_PAIRS, "{ type ipv4_addr . ipv4_addr; }"], 5.0)
-    run(["nft", "add", "set", TABLE_FAMILY, TABLE_NAME, SET_BLOCKED_INTERNET, "{ type ipv4_addr; }"], 5.0)
-    run(["nft", "add", "set", TABLE_FAMILY, TABLE_NAME, SET_BLOCKED_GATEWAY, "{ type ipv4_addr; }"], 5.0)
-    run(["nft", "add", "set", TABLE_FAMILY, TABLE_NAME, SET_ISOLATED, "{ type ipv4_addr; }"], 5.0)
+    path = filter_table_file()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            definition = "".join(l for l in f if l.strip() not in _RESET_LINES)
+    except OSError as e:
+        raise RuntimeError(f"INA filter table definition not readable ({path}): {e}") from e
+
+    with tempfile.NamedTemporaryFile("w", suffix=".nft", delete=False, encoding="utf-8") as tf:
+        tf.write(definition)
+        temp_name = tf.name
+    try:
+        code, stdout, stderr = run(["nft", "-f", temp_name], 10.0)
+    finally:
+        os.unlink(temp_name)
+    if code != 0:
+        raise RuntimeError(f"Could not load the INA filter table: {(stderr or stdout).strip()}")
     return True
 
 

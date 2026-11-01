@@ -4,6 +4,8 @@ This document is a comprehensive, reproducible step-by-step setup guide for buil
 
 The Raspberry Pi 5 acts as the central router and Wi-Fi access point (`INA-Router`), while connected client devices (including a Fedora developer workstation) join as standard wireless clients.
 
+All configuration files referenced below live in this repository under `config/` and are the source of truth. Copy them instead of retyping them. Sections 1–14 build the router. Section 15 installs the INA application on it (MCP server, policy engine, privilege boundary).
+
 ---
 
 ## 1. Hardware & Environmental Prerequisites
@@ -82,11 +84,11 @@ The Pi uses its physical Wi-Fi adapter (`wlan0`) to connect to the upstream phon
 
 ## 5. Installing Core Network Packages
 
-Update package repositories and install the required routing and AP utilities:
+Update package repositories and install the required routing and AP utilities, plus what the INA application needs (Python venv, git, ethtool):
 
 ```bash
 sudo apt update
-sudo apt install -y hostapd dnsmasq nftables iw iperf3
+sudo apt install -y hostapd dnsmasq nftables iw iperf3 ethtool git python3-venv
 ```
 
 > **Note on `hostapd`:** On Debian/Raspberry Pi OS, `hostapd` is masked by default upon installation. Unmask it now:
@@ -94,35 +96,34 @@ sudo apt install -y hostapd dnsmasq nftables iw iperf3
 > sudo systemctl unmask hostapd
 > ```
 
+Get the repository onto the Pi now. The following sections copy files from it:
+
+```bash
+sudo install -d -o root -g root -m 0755 /opt/ina
+sudo git clone <repository-url> /opt/ina/inav2
+cd /opt/ina/inav2
+```
+
 ---
 
 ## 6. Configuring the Access Point Daemon (`hostapd`)
 
-Create the configuration file `/etc/hostapd/hostapd.conf`:
+Install the template, then set your passphrase (and `country_code` if you are not in India):
 
 ```bash
-sudo nano /etc/hostapd/hostapd.conf
+sudo install -m 0600 config/hostapd/hostapd.conf.template /etc/hostapd/hostapd.conf
+sudo nano /etc/hostapd/hostapd.conf        # change wpa_passphrase (and country_code)
+sudo install -o root -g root -m 0600 /dev/null /etc/hostapd/hostapd.deny
 ```
 
-Insert the following verified configuration:
+The template contains everything INA relies on. The plain AP settings used earlier do not:
 
-```ini
-# INA v2 Access Point Configuration
-interface=ap0
-driver=nl80211
-ssid=INA-Router
-hw_mode=g
-channel=11
-wmm_enabled=0
-macaddr_acl=0
-auth_algs=1
-ignore_broadcast_ssid=0
-wpa=2
-wpa_passphrase=ConfigureYourStrongPasswordHere
-wpa_key_mgmt=WPA-PSK
-wpa_pairwise=TKIP
-rsn_pairwise=CCMP
-```
+| Setting | Why INA needs it |
+|---|---|
+| `ap_isolate=1` | Stops the radio from bridging clients directly to each other, so client↔client traffic passes through the Pi and `block_client <a> <b>` can stop it (works together with `proxy_arp_pvlan`, §8) |
+| `ctrl_interface=/run/hostapd`, `ctrl_interface_group=0` | Root-only control socket that `kick_client`/`ban_client` use through `ina-netctl` |
+| `macaddr_acl=0`, `deny_mac_file=/etc/hostapd/hostapd.deny` | MAC deny list for `ban_client` (hostapd fails to start if the file is missing, hence the `install` above) |
+| `wpa=2`, `rsn_pairwise=CCMP`, `ieee80211n=1`, `wmm_enabled=1` | WPA2-CCMP only (no TKIP); 802.11n rates need WMM |
 
 Point the system environment to this configuration file:
 
@@ -134,80 +135,33 @@ sudo sed -i 's|#DAEMON_CONF=""|DAEMON_CONF="/etc/hostapd/hostapd.conf"|' /etc/de
 
 ## 7. Configuring DHCP and DNS (`dnsmasq`)
 
-Back up any default configuration and create the dedicated INA DHCP configuration file:
+Back up any default configuration and install the INA DHCP/DNS configuration:
 
 ```bash
 sudo mv /etc/dnsmasq.conf /etc/dnsmasq.conf.bak 2>/dev/null || true
-sudo nano /etc/dnsmasq.d/ina-ap.conf
+sudo install -m 0644 config/dnsmasq/ina-ap.conf /etc/dnsmasq.d/ina-ap.conf
+sudo install -d -o root -g root -m 0755 /etc/ina
+sudo install -m 0644 /dev/null /etc/ina/dhcp-hosts     # filled by 'ina-netctl sync-devices' (§15.4)
+sudo dnsmasq --test --conf-file=/etc/dnsmasq.d/ina-ap.conf
 ```
 
-Insert the following configuration:
-
-```ini
-# INA v2 DHCP and DNS Configuration
-interface=ap0
-bind-interfaces
-listen-address=192.168.50.1
-
-# DHCP IP Pool (192.168.50.10 to 192.168.50.100, 12-hour lease)
-dhcp-range=192.168.50.10,192.168.50.100,255.255.255.0,12h
-
-# Publish Default Gateway (Option 3)
-dhcp-option=option:router,192.168.50.1
-
-# Publish DNS Server (Option 6)
-dhcp-option=option:dns-server,192.168.50.1,8.8.8.8
-
-# Authoritative DHCP for this subnet
-dhcp-authoritative
-log-dhcp
-```
+Besides the pool (`192.168.50.10–100`, 12 h), gateway and DNS options, the file sets `dhcp-hostsfile=/etc/ina/dhcp-hosts`. That file holds the per-device reservations generated from `policy/devices.yaml`, so each registered device's lease carries its admin-assigned name (e.g. `guest-phone`) and not the hostname the device picked for itself. INA tools and the policy engine refer to devices by those names. dnsmasq re-reads the file on `SIGHUP`, which `sync-devices` sends, so no restart is needed.
 
 ---
 
 ## 8. Creating the Virtual Interface Script (`ap0`)
 
-Create `/usr/local/sbin/ina-ap-interface.sh` to construct the virtual interface and assign its static IP:
+Install the interface script:
 
 ```bash
-sudo nano /usr/local/sbin/ina-ap-interface.sh
+sudo install -o root -g root -m 0755 config/scripts/ina-ap-interface.sh /usr/local/sbin/ina-ap-interface.sh
 ```
 
-Insert the following script:
+It creates `ap0` on the onboard radio if missing (`iw dev wlan0 interface add ap0 type __ap`), assigns `192.168.50.1/24` and sets:
 
-```bash
-#!/bin/bash
-set -e
-
-# INA v2 Virtual AP Interface Initializer
-IFACE="ap0"
-PHYS="wlan0"
-ROUTER_IP="192.168.50.1/24"
-
-# Create ap0 virtual interface if not present
-if ! ip link show "$IFACE" >/dev/null 2>&1; then
-    echo "Creating virtual interface $IFACE on $PHYS..."
-    iw dev "$PHYS" interface add "$IFACE" type __ap
-fi
-
-# Bring link up
-echo "Bringing $IFACE up..."
-ip link set dev "$IFACE" up
-
-# Assign static router IP if not already present
-if ! ip addr show dev "$IFACE" | grep -q "192.168.50.1"; then
-    echo "Assigning $ROUTER_IP to $IFACE..."
-    ip addr add "$ROUTER_IP" dev "$IFACE"
-fi
-
-echo "$IFACE successfully initialized."
-```
-
-Make the script executable:
-
-```bash
-sudo chmod +x /usr/local/sbin/ina-ap-interface.sh
-```
+- `net.ipv4.ip_forward=1` and `send_redirects=0`.
+- `net.ipv4.conf.ap0.proxy_arp_pvlan=1`. With `ap_isolate=1` this routes client↔client traffic through the Pi (RFC 3069 style). Without it, isolated clients cannot reach each other at all. Without `ap_isolate`, INA cannot block them from each other.
+- Segmentation offloads off on `ap0`, so HTB bandwidth shaping is accurate.
 
 ---
 
@@ -299,45 +253,29 @@ sysctl net.ipv4.ip_forward
 
 ---
 
-## 11. Configuring NAT with `nftables`
+## 11. Configuring `nftables` (NAT + INA filter table)
 
-Edit `/etc/nftables.conf` to create a modular NAT table.
+> **Safety Warning:** Do NOT add `flush ruleset` to `/etc/nftables.conf`. A blanket flush wipes unrelated firewall rules (Docker, fail2ban). INA uses named tables only: `ip ina_nat` and `inet ina_filter`.
 
-> **Safety Warning:** Do NOT add `flush ruleset` at the beginning of this configuration. A blanket flush wipes existing firewall rules and Docker/system filters. Use an explicit table namespace (`ip ina_nat`).
-
-```bash
-sudo nano /etc/nftables.conf
-```
-
-Insert the verified NAT configuration:
-
-```text
-#!/usr/sbin/nft -f
-
-table ip ina_nat {
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        ip saddr 192.168.50.0/24 oifname "wlan0" masquerade
-    }
-}
-```
-
-Apply and verify:
+Install the NAT configuration and the INA filter table:
 
 ```bash
-sudo nft -f /etc/nftables.conf
+sudo install -m 0644 config/nftables/nftables.conf /etc/nftables.conf
+sudo install -d -m 0755 /etc/nftables.d
+sudo install -m 0644 config/nftables/ina-filter.nft /etc/nftables.d/ina-filter.nft
+sudo nft -c -f /etc/nftables.conf && sudo nft -f /etc/nftables.conf
+```
+
+`/etc/nftables.conf` defines `table ip ina_nat` (masquerade `192.168.50.0/24` out of `wlan0`) and includes `/etc/nftables.d/ina-filter.nft`. That file is the `inet ina_filter` table: the block/isolation sets plus the `prerouting` (anti-spoofing), `forward` (client↔client, Internet) and `input` (Pi services; DHCP/DNS always allowed) chains that make the sets take effect.
+
+Verify both tables, and that the filter chains exist (the sets alone do nothing):
+
+```bash
 sudo nft list table ip ina_nat
+sudo nft list chain inet ina_filter forward     # must list the @blocked_pairs/@blocked_internet/@isolated rules
 ```
 
-Expected output:
-```text
-table ip ina_nat {
-    chain postrouting {
-        type nat hook postrouting priority srcnat; policy accept;
-        ip saddr 192.168.50.0/24 oifname "wlan0" masquerade
-    }
-}
-```
+Reloading nftables recreates `ina_filter` with empty sets. `ina-reconcile.service` (§15) is `PartOf=nftables.service`, so it re-applies the saved blocks, bans and bindings automatically when nftables restarts.
 
 ---
 
@@ -346,16 +284,10 @@ table ip ina_nat {
 Enable all services for automatic boot persistence:
 
 ```bash
-sudo systemctl enable ina-ap-interface.service
-sudo systemctl enable hostapd.service
-sudo systemctl enable dnsmasq.service
-sudo systemctl enable nftables.service
+sudo systemctl enable ina-ap-interface.service hostapd.service dnsmasq.service nftables.service
 
-# Start services
 sudo systemctl start ina-ap-interface.service
-sudo systemctl restart hostapd.service
-sudo systemctl restart dnsmasq.service
-sudo systemctl restart nftables.service
+sudo systemctl restart hostapd.service dnsmasq.service nftables.service
 ```
 
 Check status:
@@ -363,6 +295,7 @@ Check status:
 ```bash
 systemctl is-active ina-ap-interface hostapd dnsmasq nftables
 # Expected output for each: active
+sudo hostapd_cli -i ap0 ping          # Expected: PONG (control socket for kick/ban)
 ```
 
 ---
@@ -406,3 +339,98 @@ After the Pi reboots:
    sysctl net.ipv4.ip_forward
    ```
    All services must report `active` and forwarding must report `1`.
+
+---
+
+## 15. Installing the INA Application
+
+This section installs the INA software on the router set up above. The design and the security reasoning behind each piece are in [privilege_boundary.md](privilege_boundary.md).
+
+### 15.1 Code, virtualenv and kernel modules
+
+```bash
+cd /opt/ina/inav2
+sudo chown -R root:root /opt/ina                       # 'ina' must not be able to modify code that runs as root
+sudo python3 -m venv /opt/ina/venv
+sudo /opt/ina/venv/bin/pip install -r requirements.txt
+sudo install -m 0644 config/modules-load.d/ina.conf /etc/modules-load.d/ina.conf
+sudo systemctl restart systemd-modules-load            # ifb, sch_htb, sch_sfq, cls_flower, act_mirred
+```
+
+### 15.2 Service account, privilege boundary and runtime directories
+
+```bash
+sudo useradd --system --create-home --shell /bin/sh ina
+sudo install -o root -g root -m 0755 config/scripts/ina-netctl /usr/local/sbin/ina-netctl
+sudo install -o root -g root -m 0755 config/scripts/ina-mcp    /usr/local/bin/ina-mcp
+sudo visudo -cf config/sudoers.d/ina && sudo install -o root -g root -m 0440 config/sudoers.d/ina /etc/sudoers.d/ina
+sudo install -m 0644 config/tmpfiles.d/ina.conf /etc/tmpfiles.d/ina.conf
+sudo systemd-tmpfiles --create /etc/tmpfiles.d/ina.conf   # /run/ina, /var/lib/ina, /var/log/ina, /var/log/ina-mcp
+```
+
+### 15.3 Boot-time reconcile and ban expiry
+
+```bash
+sudo install -m 0644 config/systemd/ina-reconcile.service config/systemd/ina-expire.service \
+     config/systemd/ina-expire.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now ina-reconcile.service ina-expire.timer
+```
+
+### 15.4 Register the real devices
+
+Edit `policy/devices.yaml` (name → MAC → class, optional fixed IP) and `policy/rules.yaml` → `protected_macs`. **Replace every example MAC (`aa:bb:cc:dd:ee:..`).** Phones and laptops usually use a per-network private MAC. Read the one shown for the `INA-Router` network, or take it from the lease file:
+
+```bash
+cat /var/lib/misc/dnsmasq.leases      # <expiry> <mac> <ip> <hostname> ...
+sudo nano /opt/ina/inav2/policy/devices.yaml
+sudo nano /opt/ina/inav2/policy/rules.yaml
+sudo ina-netctl sync-devices          # writes /etc/ina/dhcp-hosts, binds fixed IPs, SIGHUPs dnsmasq
+```
+
+`sync-devices` refuses to run while example MACs remain. Devices pick up their new name at their next DHCP renewal; reconnecting them (or `kick_client`) makes it immediate. Until then INA still finds a registered device by its MAC.
+
+### 15.5 Role tokens and operator access
+
+Create one random token per role, give the plain tokens to the people who need them, and store only their SHA-256 hashes on the Pi:
+
+```bash
+for role in admin operator viewer; do
+  t=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
+  echo "$role token (give to the $role, store safely): $t"
+  echo "INA_$(echo $role | tr a-z A-Z)_TOKEN_SHA256=$(printf %s "$t" | sha256sum | cut -d' ' -f1)" | sudo tee -a /etc/ina/mcp.env >/dev/null
+done
+sudo chown root:ina /etc/ina/mcp.env && sudo chmod 0640 /etc/ina/mcp.env
+```
+
+For each operator laptop, add one line to `~ina/.ssh/authorized_keys` (owned by `ina`, mode 0600). The key is bound to a role through its token:
+
+```text
+restrict,command="INA_ROLE_TOKEN=<operator-token> /usr/local/bin/ina-mcp" ssh-ed25519 AAAA... operator-laptop
+```
+
+On the laptop: `python -m assistant --server mcp --mcp-command "ssh ina@ina-router"`.
+
+### 15.6 Verify the installation
+
+```bash
+sudo -u ina sudo -n /usr/local/sbin/ina-netctl --json --role viewer status --   # {"ok": true, ...}
+sudo -u ina nft list ruleset 2>&1 | head -1                                     # must FAIL: 'ina' has no privileges
+sudo -u ina sudo -n /usr/sbin/nft list ruleset 2>&1 | head -1                   # must FAIL: only ina-netctl is allowed
+sudo nft list chain inet ina_filter forward | grep -c '@'                       # > 0: filter rules loaded
+systemctl is-active ina-reconcile.service ina-expire.timer                      # active, active
+```
+
+Then run the functional check from a client (here `guest-phone`, registered in §15.4):
+
+```bash
+sudo ina-netctl block guest-phone internet    # guest-phone: browsing stops, Wi-Fi and DHCP stay up
+sudo ina-netctl unblock guest-phone internet  # browsing resumes
+sudo ina-netctl limit guest-phone 5000 5000   # iperf3 from guest-phone tops out near 5 Mbit/s
+sudo ina-netctl unlimit guest-phone
+sudo reboot                                   # afterwards: sudo nft list set inet ina_filter blocked_internet
+```
+
+Record the results in [testing.md](testing.md).
+
+---

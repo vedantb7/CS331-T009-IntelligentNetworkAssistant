@@ -1,12 +1,15 @@
 [Unit]
-Description=INA: re-apply desired blocks and bandwidth limits
+Description=INA: re-apply desired blocks, bandwidth limits, bans and anti-spoofing bindings
 After=nftables.service ina-ap-interface.service hostapd.service
 Requires=ina-ap-interface.service
+# Reloading nftables replaces the ina_filter table (emptying its sets);
+# PartOf makes a restart of nftables.service re-run this reconcile.
+PartOf=nftables.service
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/local/sbin/ina-netctl reconcile
 
 [Install]
 WantedBy=multi-user.target
-

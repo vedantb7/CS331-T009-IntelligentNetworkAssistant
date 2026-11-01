@@ -48,6 +48,7 @@ from inav2.network.bandwidth import (
     ensure_tc_infrastructure,
     remove_bandwidth_limit_rules,
 )
+from inav2.network.devices import load_devices, sync_antispoof_sets, sync_devices
 from inav2.network.service import (
     default_service,
     load_state,
@@ -82,6 +83,13 @@ def _reconcile(deny_file: Optional[str], run) -> int:
 
     # 1. Re-initialize nftables table and sets
     ensure_ina_filter_table(runner=run)
+
+    # 1b. Re-bind registered fixed IPs to their MACs (anti-spoofing sets start empty)
+    try:
+        bound = sync_antispoof_sets(load_devices(), runner=run)
+        print(f"  Anti-spoofing: {bound} fixed-IP device(s) bound")
+    except Exception as e:
+        print(f"  Warning: anti-spoofing sets not restored: {e}", file=sys.stderr)
 
     # 2. Re-apply block rules
     for b in blocks:
@@ -174,6 +182,10 @@ def _run_command(parsed: argparse.Namespace) -> object:
         return {"expired": default_service.expire_bans()}
     if parsed.command == "status":
         return default_service.status(parsed.client, role=role)
+    if parsed.command == "sync-devices":
+        return sync_devices(runner=default_service.runner,
+                            allow_placeholders=parsed.allow_placeholders,
+                            reload=not parsed.no_reload)
     raise ValueError(f"Unknown command: {parsed.command}")
 
 
@@ -236,6 +248,15 @@ def main(args: Optional[List[str]] = None) -> int:
     # status
     p_status = subparsers.add_parser("status", help="Show client status and limits")
     p_status.add_argument("client", nargs="?", default=None, help="Optional client filter")
+
+    # sync-devices
+    p_sync = subparsers.add_parser(
+        "sync-devices",
+        help="Write dnsmasq reservations and anti-spoofing sets from policy/devices.yaml")
+    p_sync.add_argument("--allow-placeholders", action="store_true",
+                        help="Proceed even if devices.yaml still has the example MACs")
+    p_sync.add_argument("--no-reload", action="store_true",
+                        help="Do not signal dnsmasq to re-read the reservations")
 
     # reconcile
     subparsers.add_parser("reconcile", help="Re-apply state.json to kernel after boot")

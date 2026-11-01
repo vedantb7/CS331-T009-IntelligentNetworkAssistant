@@ -149,6 +149,15 @@ def resolve_station(
         pass
 
     lease = next((l for l in records if (l.hostname or "").lower() == ident), None)
+    if lease is None and leases is None and not leases_map:
+        # Registered in devices.yaml: identify by its MAC, even if the lease shows
+        # another hostname or the device is offline (it can still be banned).
+        from inav2.network.devices import device_mac
+
+        mac = device_mac(ident)
+        if mac:
+            by_mac = next((l for l in records if (l.mac_address or "").lower() == mac.lower()), None)
+            return Station(name=ident, ip=by_mac.ip_address if by_mac else None, mac=normalize_mac(mac))
     if lease is None:
         known = ", ".join(sorted({l.hostname for l in records if l.hostname})) or "none"
         raise ValueError(f"Unknown client '{identifier}'. Known clients: {known}.")

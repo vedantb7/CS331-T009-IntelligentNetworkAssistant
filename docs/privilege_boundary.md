@@ -45,44 +45,9 @@ If the command log can't be written, the command has already run. Its result is 
 
 Known limit: anyone who controls the `ina` account can run `sudo ina-netctl --role admin …` directly and so skip the MCP policy guard. They are still held by the service layer's checks (protected devices, subnet, rate and ban bounds). Moving the token check inside `ina-netctl` would close this. It needs the token hashes in a root-owned file such as `/etc/ina/tokens.env`, and is planned as a follow-up.
 
-## Install on the Pi
+## Install and verify on the Pi
 
-```bash
-# users and code (root-owned)
-sudo useradd --system --create-home --shell /bin/sh ina   # sshd runs the forced command via the login shell, so not nologin
-sudo install -d -o root -g root -m 0755 /opt/ina
-sudo cp -r inav2 /opt/ina/ && sudo chown -R root:root /opt/ina/inav2
-sudo python3 -m venv /opt/ina/venv && sudo /opt/ina/venv/bin/pip install -r /opt/ina/inav2/requirements.txt
-
-# boundary
-sudo install -o root -g root -m 0755 /opt/ina/inav2/config/scripts/ina-netctl /usr/local/sbin/ina-netctl
-sudo visudo -cf /opt/ina/inav2/config/sudoers.d/ina && \
-  sudo install -o root -g root -m 0440 /opt/ina/inav2/config/sudoers.d/ina /etc/sudoers.d/ina
-sudo install -m 0644 /opt/ina/inav2/config/tmpfiles.d/ina.conf /etc/tmpfiles.d/ina.conf
-sudo systemd-tmpfiles --create /etc/tmpfiles.d/ina.conf
-
-# MCP server
-sudo install -o root -g root -m 0755 /opt/ina/inav2/config/scripts/ina-mcp /usr/local/bin/ina-mcp
-sudo install -d -o root -g ina -m 0750 /etc/ina
-#   /etc/ina/mcp.env (root:ina 0640): INA_ADMIN_TOKEN_SHA256=… INA_OPERATOR_TOKEN_SHA256=… INA_VIEWER_TOKEN_SHA256=…
-#   ~ina/.ssh/authorized_keys, one line per operator key:
-#   restrict,command="INA_ROLE_TOKEN=<operator-token> /usr/local/bin/ina-mcp" ssh-ed25519 AAAA… operator-laptop
-```
-
-On the operator laptop:
-
-```bash
-python -m assistant --server mcp --mcp-command "ssh ina@ina-router" "list devices"
-```
-
-## Verify
-
-```bash
-sudo -u ina sudo -n /usr/local/sbin/ina-netctl --json --role viewer status --   # {"ok": true, ...}
-sudo -u ina sudo -n /usr/sbin/nft list ruleset                                  # must FAIL (not allowed)
-sudo -u ina nft list ruleset                                                    # must FAIL (no privilege)
-ls -ld /opt/ina /opt/ina/venv /usr/local/sbin/ina-netctl                        # root-owned, not group/world-writable
-```
+The step-by-step procedure is in [setup.md §15](setup.md#15-installing-the-ina-application): code and venv, the `ina` account, the `ina-netctl` wrapper, sudoers, tmpfiles, systemd units, device registration, role tokens and the SSH forced command. It ends with the checks that prove the boundary holds: `sudo -u ina nft …` must fail and `sudo -u ina sudo -n ina-netctl …` must work.
 
 ## Local development (no Pi, no sudo)
 
