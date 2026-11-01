@@ -8,7 +8,9 @@ Ties the pieces together for one request:
       -> build a tool call and attach the role token
       -> send it to the server via a transport            (assistant/transport.py)
       -> read the uniform result (decision + verification)
-      -> explain the outcome in plain words
+      -> reduce it to the structured, command-free view   (assistant/result_view.py)
+      -> the LLM writes the reply from that view; the deterministic template
+         is used when no LLM is configured or its reply fails the checks
 
 The assistant never attaches a role, never runs a command, and only ever sees
 admin-assigned device names. Every request, interpretation and result is kept
@@ -37,6 +39,7 @@ from typing import Any, Dict, List, Optional
 from assistant.contract import ToolCall, ToolName, ToolResult
 from assistant.intent import Intent
 from assistant.llm import LLMBackend, get_backend
+from assistant.result_view import llm_result_view
 from assistant.transport import MockTransport, Transport
 
 # Map a role name to the token the client will send. In a real deployment the
@@ -55,6 +58,8 @@ class TurnRecord:
     reply: str
     result: Optional[Dict[str, Any]] = None
     elapsed_s: float = 0.0
+    llm_view: Optional[Dict[str, Any]] = None   # exactly what the LLM was shown
+    reply_source: str = "template"              # "llm" or "template"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -65,6 +70,8 @@ class TurnRecord:
             "reply": self.reply,
             "result": self.result,
             "elapsed_s": round(self.elapsed_s, 3),
+            "llm_view": self.llm_view,
+            "reply_source": self.reply_source,
         }
 
 
@@ -129,7 +136,25 @@ class NetworkAssistant:
                         token=self.token, request_id=request_id)
 
     # -- plain-language replies --------------------------------------------
+    def _reply(self, request: str, result: ToolResult):
+        """Step 6-7: give the LLM the structured view, take its reply, or fall back.
+
+        Returns (reply, source, view). The LLM never sees the raw ToolResult,
+        only the whitelisted view (no commands, no command output).
+        """
+        view = llm_result_view(result)
+        try:
+            text = self.backend.explain(request, view)
+        except Exception:
+            text = None
+        if text:
+            return text, "llm", view
+        return self._explain(result), "template", view
+
     def _explain(self, result: ToolResult) -> str:
+        if result.status == "preview" or (result.data or {}).get("requires_confirmation"):
+            # Nothing has changed yet; never say "Done" for a preview.
+            return result.detail or "This change needs your confirmation before it is applied."
         if result.status == "denied":
             reason = result.decision.reason if result.decision else result.detail
             return f"I can't do that: {reason}"
@@ -201,7 +226,7 @@ class NetworkAssistant:
             or (result.data and result.data.get("requires_confirmation"))
         )
         if is_preview:
-            reply = result.detail or self._explain(result)
+            reply, source, view = self._reply(request, result)
             if interactive and sys.stdin.isatty():
                 print(reply)
                 try:
@@ -211,21 +236,22 @@ class NetworkAssistant:
                 if ans == "y":
                     call.arguments["confirm"] = True
                     result = self.transport.call(call)
-                    reply = self._explain(result)
+                    reply, source, view = self._reply(request, result)
                     outcome = result.status
                 else:
                     outcome = "preview"
-                    reply = "Cancelled by user."
+                    reply, source = "Cancelled by user.", "template"
             else:
                 outcome = "preview"
         else:
-            reply = self._explain(result)
+            reply, source, view = self._reply(request, result)
             outcome = result.status
 
         rec = TurnRecord(
             request_id=request_id, raw_text=request, intent=intent.to_dict(),
             outcome=outcome, reply=reply,
             result=_result_to_dict(result), elapsed_s=time.time() - started,
+            llm_view=view, reply_source=source,
         )
         self.transcript.append(rec)
         return rec

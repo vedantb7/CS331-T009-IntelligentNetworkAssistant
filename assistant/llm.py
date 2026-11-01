@@ -25,16 +25,32 @@ from typing import List, Optional
 from assistant import intent as intent_mod
 from assistant.contract import ToolName
 from assistant.intent import Intent
-from assistant.prompts import build_system_prompt, build_user_prompt, few_shot_text
+from assistant.prompts import (
+    build_reply_prompt,
+    build_system_prompt,
+    build_user_prompt,
+    few_shot_text,
+)
+from assistant.result_view import mentions_command
+
+MAX_REPLY_CHARS = 600
 
 
 class LLMBackend:
-    """Interface: turn a request + known device names into an :class:`Intent`."""
+    """Interface for both LLM jobs in the pipeline.
+
+    - ``interpret`` (step 2): request + known device names -> :class:`Intent`.
+    - ``explain`` (step 7): request + structured result view -> reply text, or
+      ``None`` to let the assistant use its deterministic template instead.
+    """
 
     name = "base"
 
     def interpret(self, request: str, device_names: List[str]) -> Intent:
         raise NotImplementedError
+
+    def explain(self, request: str, result_view: dict) -> Optional[str]:
+        return None
 
 
 class RuleBasedBackend(LLMBackend):
@@ -76,6 +92,21 @@ def _coerce_llm_json_to_intent(payload: dict, request: str) -> Intent:
                   raw_text=request, parser="llm", confidence=0.9)
 
 
+def _coerce_llm_reply(payload: object, result_view: dict) -> Optional[str]:
+    """Accept the model's reply only if it is consistent with the result it was given."""
+    if not isinstance(payload, dict):
+        return None
+    reply = payload.get("reply")
+    # The model must echo the real status; a mismatch means it misread the
+    # result (e.g. describing a denial as a success), so it is not shown.
+    if payload.get("status") != result_view.get("status") or not isinstance(reply, str):
+        return None
+    reply = " ".join(reply.split())
+    if not reply or len(reply) > MAX_REPLY_CHARS or mentions_command(reply):
+        return None
+    return reply
+
+
 class GeminiBackend(LLMBackend):
     """Calls Gemini over HTTPS using only the standard library."""
 
@@ -94,6 +125,18 @@ class GeminiBackend(LLMBackend):
             + "\n\nExamples:\n" + few_shot_text()
             + "\n\n" + build_user_prompt(request, device_names)
         )
+        payload = json.loads(self._generate_json(prompt))
+        return _coerce_llm_json_to_intent(payload, request)
+
+    def explain(self, request: str, result_view: dict) -> Optional[str]:
+        try:
+            payload = json.loads(self._generate_json(build_reply_prompt(request, result_view)))
+        except Exception:
+            return None
+        return _coerce_llm_reply(payload, result_view)
+
+    def _generate_json(self, prompt: str) -> str:
+        """One generateContent call with JSON output; returns the model's text."""
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
             f"{self.model}:generateContent?key={self.api_key}"
@@ -108,9 +151,7 @@ class GeminiBackend(LLMBackend):
         )
         with urllib.request.urlopen(req, timeout=self.timeout) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        text = data["candidates"][0]["content"]["parts"][0]["text"]
-        payload = json.loads(text)
-        return _coerce_llm_json_to_intent(payload, request)
+        return data["candidates"][0]["content"]["parts"][0]["text"]
 
 
 def get_backend(prefer_llm: bool = True) -> LLMBackend:

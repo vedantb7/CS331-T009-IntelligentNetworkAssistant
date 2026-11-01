@@ -29,7 +29,9 @@ Every call passes through the same server-side pipeline before anything runs:
 
 Service errors are raised as ToolError so MCP transmits them as actionable
 'isError: true' results. The message starts with "Denied" when nothing was
-executed and "Failed" when the change itself or its verification failed.
+executed and "Failed" when the change itself or its verification failed. A
+"Failed" message is a fixed summary with a reference (the request ID), never
+the command line or its output.
 """
 
 from __future__ import annotations
@@ -74,7 +76,15 @@ T = TypeVar("T")
 TOKEN_ENV = "INA_ROLE_TOKEN"
 
 # Errors raised after the command started; everything else means nothing ran.
-_FAILED_ERRORS = (KernelMutationError, LockTimeoutError, VerificationError, WirelessControlError)
+# Their raw text can carry command lines and stderr, so the caller (and the LLM)
+# only gets a fixed summary plus the request ID; the full detail is in the
+# policy audit outcome and the root-side command log under that ID.
+_FAILURE_SUMMARIES = (
+    (KernelMutationError, "The router could not apply the change"),
+    (VerificationError, "The change could not be verified on the router"),
+    (WirelessControlError, "The Wi-Fi access point did not accept the request"),
+    (LockTimeoutError, "Another network change is in progress; try again shortly"),
+)
 
 _guard: Optional[PolicyGuard] = None
 
@@ -95,9 +105,11 @@ def get_guard() -> PolicyGuard:
     return _guard
 
 
-def _error_text(err: INAError) -> str:
-    prefix = "Failed" if isinstance(err, _FAILED_ERRORS) else "Denied"
-    return f"{prefix}: {err}"
+def _error_text(err: INAError, request_id: str) -> str:
+    for error_cls, summary in _FAILURE_SUMMARIES:
+        if isinstance(err, error_cls):
+            return f"Failed: {summary} (reference {request_id})."
+    return f"Denied: {err}"
 
 
 def _execute(
@@ -125,7 +137,7 @@ def _execute(
                                      commands=summarize(trace))
             except AuditError:
                 pass
-            raise ToolError(_error_text(err)) from err
+            raise ToolError(_error_text(err, result.request_id)) from err
 
     status = "preview" if getattr(out, "preview", False) else "success"
     try:
