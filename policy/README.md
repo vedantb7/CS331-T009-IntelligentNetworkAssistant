@@ -16,18 +16,29 @@ policy/
   validation.py     safe parsing of names, IPs, MACs, kbit/s, minutes; log sanitising
   engine.py         PolicyEngine.evaluate(role, tool, arguments, context) -> allow/deny + reason
   authorization.py  role tokens (SHA-256 hashed), constant-time check
+  grants.py         per-person role grants bound to a device (ina-netctl roles ...)
   audit.py          append-only, hash-chained JSONL audit log + CLI
   guard.py          PolicyGuard: token -> role -> engine -> audit (for the MCP server)
   integration.py    evaluate_policy(): drop-in for service.py's evaluate_policy_placeholder
   _yaml.py          stdlib-only YAML-subset reader, used only when PyYAML is missing
 ```
 
-## Roles (from `docs/tools/*.md` "Role Requirements")
+## Devices and roles
+
+- **Every device on the network is a `client`.** Registered in `devices.yaml` or
+  not, it has no role and both operators and admins may act on it.
+- **`protected`** devices are the ones the admin lists by hand (the router and the
+  admins' laptops). No role may change them.
+- **Nobody has a role by default.** The admin grants one manually to a named
+  person, bound to one registered device with a fixed IP
+  (`sudo ina-netctl roles grant <person> <role> --device <device>`, see
+  `grants.py`). The token only works from that device (`R-token-device`), and a
+  role holder cannot act on their own bound device (`R-self-device`).
 
 | | admin | operator | viewer |
 |---|---|---|---|
 | Tools | all 8 (+ `update_policy`) | all 8 | `get_status` only |
-| Device classes | staff, guest, unknown | guest, unknown | – |
+| Device classes | client | client | – |
 | `limit_bandwidth` (download & upload) | 1000–20000 kbit/s | 2000–20000 kbit/s | – |
 | `ban_client` duration | 1–10080 min, or permanent | 1–60 min, **required** | – |
 | `unban_client` | any ban | only bans made by an operator | – |
@@ -41,7 +52,7 @@ Nobody can act on a **protected** device: class `protected`, a name in
 | Earlier rule | Now enforced by | Rule ID on deny |
 |---|---|---|
 | wifi-001 never evict infrastructure | `rules.yaml` protected_* (applies to every tool) | `R-protected` |
-| wifi-002 operator may kick guests | operator `device_classes: [guest, unknown]` | `R-role-class` |
+| wifi-002 operator may kick clients | operator `device_classes: [client]` | `R-role-class` |
 | wifi-003 operator bans ≤ 60 min, duration required | operator `ban.max_minutes: 60`, `allow_permanent: false` | `R-ban-duration` |
 | wifi-004 operator may lift own bans | operator `ban.unban_scope: own_role` | `R-unban-scope` |
 | wifi-005 admin full control (non-protected) | admin role | – |
@@ -53,7 +64,7 @@ Nobody can act on a **protected** device: class `protected`, a name in
   A partial match is refused with `R-ambiguous-device` and the `candidates` list,
   so the assistant asks the user instead of guessing. No match: `R-unknown-device`.
 - **IP / MAC** of a device that is not in `devices.yaml` is accepted and treated as
-  class `unknown`. IPs must be host addresses in `192.168.50.0/24`. MACs are only
+  class `client`. IPs must be host addresses in `192.168.50.0/24`. MACs are only
   accepted by `kick_client`, `ban_client` and `unban_client`, as in the schemas.
 - If the server passes what it resolved a client to (`client_ip`, `client_mac`),
   the engine cross-checks it against the device list. A name, IP and MAC that point
@@ -142,6 +153,8 @@ python -m policy.audit --verify           # detects edited or deleted records
 | Rule | Meaning |
 |---|---|
 | R-token | missing/unknown token |
+| R-token-device | a device-bound role token used from another address |
+| R-self-device | a role holder acting on the device their own role is bound to |
 | R-role-unknown | role not in roles.yaml |
 | R-unknown-tool | not one of the allowed tools |
 | R-role-action | role may not use this tool (viewer mutating, operator `update_policy`) |

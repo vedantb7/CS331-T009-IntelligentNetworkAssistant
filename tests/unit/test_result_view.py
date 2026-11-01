@@ -35,7 +35,7 @@ class CapturingBackend(RuleBasedBackend):
         self.reply = reply
         self.status_override = status_override
 
-    def explain(self, request, result_view):
+    def explain(self, request, result_view, context=None):
         self.views.append(json.loads(json.dumps(result_view)))  # must be plain JSON
         payload = {"status": self.status_override or result_view["status"],
                    "reply": self.reply or f"LLM says: {result_view['status']}."}

@@ -30,8 +30,11 @@ from policy.validation import (  # noqa: E402
 )
 
 POLICY_DIR = REPO / "policy"
+# Both are ordinary clients now (class "client"); STAFF keeps its old name only
+# to identify a second registered client.
 GUEST, STAFF = "guest-phone", "lab-laptop-3"
 GUEST_MAC, STAFF_MAC = "aa:bb:cc:dd:ee:04", "aa:bb:cc:dd:ee:03"
+ADMIN_MAC = "aa:bb:cc:dd:ee:01"
 
 # Minimal valid arguments for each tool, acting on the guest device.
 GUEST_ARGS = {
@@ -99,10 +102,13 @@ class TestRoleTable(EngineBase):
                           "R-role-unknown")
         self.assertDenied(self.engine.evaluate(None, "get_status", {}), "R-role-unknown")
 
-    def test_operator_limited_to_guest_and_unknown_classes(self):
-        self.assertDenied(self.ev("operator", "kick_client", client=STAFF), "R-role-class")
-        self.assertAllowed(self.ev("admin", "kick_client", client=STAFF))
-        self.assertAllowed(self.ev("operator", "kick_client", client="192.168.50.77"))
+    def test_every_connected_device_is_a_client(self):
+        # Registered or not, a device is a normal client both roles may act on.
+        for role in ("operator", "admin"):
+            self.assertAllowed(self.ev(role, "kick_client", client=STAFF))
+            self.assertAllowed(self.ev(role, "kick_client", client="192.168.50.77"))
+        self.assertDenied(self.ev("viewer", "kick_client", client=STAFF), "R-role-action")
+        self.assertDenied(self.ev("operator", "kick_client", client="admin-laptop"), "R-protected")
 
 
 class TestProtectedDevices(EngineBase):
@@ -122,9 +128,11 @@ class TestProtectedDevices(EngineBase):
                                   download_kbit=5000, upload_kbit=5000), "R-protected")
 
     def test_protected_mac_behind_an_unregistered_ip(self):
-        # The server resolved 192.168.50.60 to the admin laptop's MAC.
-        self.assertDenied(self.ev("admin", "kick_client", {"client_mac": "aa:bb:cc:dd:ee:01"},
-                                  client="192.168.50.60"), "R-protected")
+        # The server resolved 192.168.50.60 to the admin laptop's MAC. The laptop has a
+        # fixed IP (192.168.50.2), so the address also contradicts it: still refused.
+        result = self.ev("admin", "kick_client", {"client_mac": ADMIN_MAC}, client="192.168.50.60")
+        self.assertFalse(result.allowed)
+        self.assertIn(result.decision.rule, ("R-protected", "R-identity-conflict"))
 
     def test_extra_protected_names_via_rules(self):
         stricter = PolicyEngine(replace(self.engine.config, protected_devices=frozenset({GUEST})),
@@ -159,27 +167,28 @@ class TestClientResolution(EngineBase):
         self.assertDenied(result, "R-ambiguous-device")
         self.assertGreater(len(result.decision.candidates), 1)
 
-    def test_unregistered_ip_or_mac_is_class_unknown(self):
+    def test_unregistered_ip_or_mac_is_class_client(self):
         result = self.ev("operator", "ban_client", client="192.168.50.42", duration_minutes=10)
         self.assertAllowed(result)
-        self.assertEqual((result.device.cls, result.device.registered), ("unknown", False))
+        self.assertEqual((result.device.cls, result.device.registered), ("client", False))
         result = self.ev("operator", "kick_client", client="02:11:22:33:44:55")
         self.assertAllowed(result)
         self.assertEqual(result.device.mac, "02:11:22:33:44:55")
 
     def test_registered_mac_resolves_to_its_class(self):
-        self.assertDenied(self.ev("operator", "kick_client", client=STAFF_MAC), "R-role-class")
+        self.assertDenied(self.ev("operator", "kick_client", client=ADMIN_MAC), "R-protected")
         self.assertAllowed(self.ev("operator", "kick_client", client=GUEST_MAC.upper()))
 
-    def test_ip_resolved_by_server_to_registered_mac_takes_that_class(self):
+    def test_ip_resolved_by_server_to_registered_mac_takes_that_identity(self):
         result = self.ev("operator", "kick_client", {"client_mac": STAFF_MAC}, client="192.168.50.33")
-        self.assertDenied(result, "R-role-class")
+        self.assertAllowed(result)
+        self.assertEqual((result.device.name, result.device.cls), (STAFF, "client"))
 
     def test_unregistered_lease_name_resolved_by_server_is_unknown(self):
         ctx = {"client_ip": "192.168.50.46", "client_mac": "02:00:00:00:00:46"}
         result = self.ev("operator", "kick_client", ctx, client="fedora-ws")
         self.assertAllowed(result)
-        self.assertEqual(result.device.cls, "unknown")
+        self.assertEqual(result.device.cls, "client")
 
     def test_spoofed_name_is_an_identity_conflict(self):
         # Some device calls itself "lab-laptop-3" but has a different MAC.
@@ -266,8 +275,7 @@ class TestBlockTargets(EngineBase):
                           "R-protected")
         self.assertDenied(self.ev("operator", "block_client", client=GUEST, target="192.168.50.1"),
                           "R-protected")
-        self.assertDenied(self.ev("operator", "block_client", client=GUEST, target=STAFF),
-                          "R-role-class")
+        self.assertAllowed(self.ev("operator", "block_client", client=GUEST, target=STAFF))
         self.assertAllowed(self.ev("admin", "block_client", client=GUEST, target=STAFF))
 
     def test_cannot_block_from_itself(self):
@@ -378,13 +386,16 @@ class TestConfigFailsClosed(unittest.TestCase):
         load_policy_config(POLICY_DIR / "roles.yaml", POLICY_DIR / "rules.yaml")
 
     def test_operator_may_not_hold_policy_action(self):
-        self.assertRejected(**{"roles.yaml": [("      - unban_client\n    device_classes: [guest",
+        self.assertRejected(**{"roles.yaml": [("      - unban_client\n    device_classes: [client]\n"
+                                               "    bandwidth_kbit: {min: 2000",
                                                "      - unban_client\n      - update_policy\n"
-                                               "    device_classes: [guest")]})
+                                               "    device_classes: [client]\n"
+                                               "    bandwidth_kbit: {min: 2000")]})
 
     def test_role_cannot_be_granted_protected_class(self):
-        self.assertRejected(**{"roles.yaml": [("device_classes: [guest, unknown]",
-                                               "device_classes: [guest, protected]")]})
+        self.assertRejected(**{"roles.yaml": [("device_classes: [client]\n    bandwidth_kbit: {min: 2000",
+                                               "device_classes: [client, protected]\n"
+                                               "    bandwidth_kbit: {min: 2000")]})
 
     def test_role_limits_cannot_exceed_hard_limits(self):
         self.assertRejected(**{"roles.yaml": [("max: 20000}", "max: 50000}")]})
@@ -410,16 +421,16 @@ class TestConfigFailsClosed(unittest.TestCase):
 
     def test_bad_device_lists_rejected(self):
         for body in (
-            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: guest}\n"
-            "  - {name: a-1, mac: 'aa:bb:cc:dd:ee:12', class: guest}\n",
-            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: guest}\n"
-            "  - {name: a-2, mac: 'AA:BB:CC:DD:EE:11', class: guest}\n",
-            "devices:\n  - {name: A-1, mac: 'aa:bb:cc:dd:ee:11', class: guest}\n",
-            "devices:\n  - {name: a_1, mac: 'aa:bb:cc:dd:ee:11', class: guest}\n",
-            "devices:\n  - {name: a-1, mac: 'not-a-mac', class: guest}\n",
+            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: client}\n"
+            "  - {name: a-1, mac: 'aa:bb:cc:dd:ee:12', class: client}\n",
+            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: client}\n"
+            "  - {name: a-2, mac: 'AA:BB:CC:DD:EE:11', class: client}\n",
+            "devices:\n  - {name: A-1, mac: 'aa:bb:cc:dd:ee:11', class: client}\n",
+            "devices:\n  - {name: a_1, mac: 'aa:bb:cc:dd:ee:11', class: client}\n",
+            "devices:\n  - {name: a-1, mac: 'not-a-mac', class: client}\n",
             "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: vip}\n",
-            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: guest, ip: '1.2.3'}\n",
-            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: guest, owner: bob}\n",
+            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: client, ip: '1.2.3'}\n",
+            "devices:\n  - {name: a-1, mac: 'aa:bb:cc:dd:ee:11', class: client, owner: bob}\n",
             "devices: []\n",
         ):
             with tempfile.TemporaryDirectory() as tmp:

@@ -36,7 +36,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from assistant.contract import ToolCall, ToolName, ToolResult
+from assistant.contract import FALLBACK_TOOL_DEFINITIONS, ToolCall, ToolName, ToolResult
 from assistant.intent import Intent
 from assistant.llm import LLMBackend, get_backend
 from assistant.result_view import llm_result_view
@@ -100,10 +100,20 @@ class NetworkAssistant:
         return []
 
     # -- interpret, with a safe fallback to the rule-based parser ----------
+    def _tool_definitions(self) -> List[Dict[str, Any]]:
+        """The tools the LLM may choose from: the MCP server's own tools/list if connected."""
+        getter = getattr(self.transport, "tool_definitions", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                pass
+        return FALLBACK_TOOL_DEFINITIONS
+
     def _interpret(self, request: str) -> Intent:
         names = self._device_names()
         try:
-            return self.backend.interpret(request, names)
+            return self.backend.interpret(request, names, self._tool_definitions())
         except Exception:
             # Any LLM/transport error -> deterministic parser, never a crash.
             from assistant import intent as intent_mod
@@ -112,6 +122,17 @@ class NetworkAssistant:
             return parsed
 
     def _build_call(self, intent: Intent, request_id: str) -> ToolCall:
+        if intent.tool_arguments is not None:
+            # The LLM chose the tool and its MCP arguments. Never let it confirm a ban.
+            args = {k: v for k, v in intent.tool_arguments.items() if k != "confirm"}
+            # Aliases for transports that predate the MCP argument names (mock).
+            if isinstance(args.get("client"), str):
+                args.setdefault("device", args["client"])
+            if isinstance(args.get("download_kbit"), (int, float)):
+                args.setdefault("mbit", args["download_kbit"] / 1000)
+            if "duration_minutes" in args:
+                args.setdefault("minutes", args["duration_minutes"])
+            return ToolCall(tool=intent.action, arguments=args, token=self.token, request_id=request_id)
         args: Dict[str, Any] = {}
         if intent.target is not None:
             args["device"] = intent.target
@@ -136,7 +157,7 @@ class NetworkAssistant:
                         token=self.token, request_id=request_id)
 
     # -- plain-language replies --------------------------------------------
-    def _reply(self, request: str, result: ToolResult):
+    def _reply(self, request: str, result: ToolResult, intent: Optional[Intent] = None):
         """Step 6-7: give the LLM the structured view, take its reply, or fall back.
 
         Returns (reply, source, view). The LLM never sees the raw ToolResult,
@@ -144,7 +165,8 @@ class NetworkAssistant:
         """
         view = llm_result_view(result)
         try:
-            text = self.backend.explain(request, view)
+            # Same LLM conversation that chose the tool: the view goes back as its result.
+            text = self.backend.explain(request, view, context=intent.llm_context if intent else None)
         except Exception:
             text = None
         if text:
@@ -226,7 +248,7 @@ class NetworkAssistant:
             or (result.data and result.data.get("requires_confirmation"))
         )
         if is_preview:
-            reply, source, view = self._reply(request, result)
+            reply, source, view = self._reply(request, result, intent)
             if interactive and sys.stdin.isatty():
                 print(reply)
                 try:
@@ -236,7 +258,7 @@ class NetworkAssistant:
                 if ans == "y":
                     call.arguments["confirm"] = True
                     result = self.transport.call(call)
-                    reply, source, view = self._reply(request, result)
+                    reply, source, view = self._reply(request, result, intent)
                     outcome = result.status
                 else:
                     outcome = "preview"
@@ -244,7 +266,7 @@ class NetworkAssistant:
             else:
                 outcome = "preview"
         else:
-            reply, source, view = self._reply(request, result)
+            reply, source, view = self._reply(request, result, intent)
             outcome = result.status
 
         rec = TurnRecord(
@@ -289,7 +311,10 @@ def _build_transport(args: argparse.Namespace) -> Transport:
         # Real pipeline: MCP client -> INA MCP server (validation + policy) -> command.
         # No silent fallback to the mock: a failure here must be visible.
         from assistant.transport import McpTransport
-        return McpTransport(token=ROLE_TOKENS.get(args.role, "operator-token"),
+        # A real role token (INA_ROLE_TOKEN) wins over the demo token for --role.
+        token = os.environ.get("INA_ROLE_TOKEN") or ROLE_TOKENS.get(args.role, "operator-token")
+        return McpTransport(token=token, url=args.mcp_url or None,
+                            ca_file=args.mcp_ca or None,
                             command=args.mcp_command or None)
     if args.server == "service":
         # Connect directly to the local NetworkService (on Pi)
@@ -340,18 +365,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="'mcp' to use the INA MCP server (stdio), 'service' for the "
                         "local service layer, or an HTTP base URL. If omitted, uses "
                         "the built-in mock network.")
+    parser.add_argument("--mcp-url", default=os.environ.get("INA_MCP_URL", ""),
+                        help="With --server mcp: Streamable HTTP endpoint of the Pi's MCP "
+                        "server, e.g. https://192.168.50.1:8443/mcp (token: $INA_ROLE_TOKEN).")
+    parser.add_argument("--mcp-ca", default=os.environ.get("INA_MCP_CA", ""),
+                        help="With --mcp-url: the Pi's TLS certificate (PEM) to trust.")
     parser.add_argument("--mcp-command", default=os.environ.get("INA_MCP_COMMAND", ""),
-                        help="With --server mcp: command that starts the MCP server on "
-                        "stdio (default: python -m inav2.mcp_server.server; e.g. "
-                        "'ssh ina@ina-router').")
+                        help="With --server mcp and no --mcp-url: command that starts the "
+                        "MCP server on stdio (development; default: a local subprocess).")
     parser.add_argument("--no-llm", action="store_true",
                         help="Force the rule-based parser even if an API key is set.")
     parser.add_argument("--transcript", default="",
                         help="Write the session transcript to this file.")
     args = parser.parse_args(argv)
 
+    try:
+        transport = _build_transport(args)
+    except RuntimeError as err:  # McpConnectionError, or the MCP SDK missing
+        print(f"Could not connect to the INA MCP server: {err}", file=sys.stderr)
+        return 2
     assistant = NetworkAssistant(
-        transport=_build_transport(args),
+        transport=transport,
         role=args.role,
         prefer_llm=not args.no_llm,
     )
@@ -374,7 +408,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 break
             if not text:
                 continue
-            rec = assistant.handle(text)
+            rec = assistant.handle(text, interactive=True)
             print(rec.reply + "\n")
     except KeyboardInterrupt:
         print()

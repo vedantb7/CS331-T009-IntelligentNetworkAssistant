@@ -157,8 +157,8 @@ class TestMCPServer(unittest.TestCase):
     def test_policy_denial_runs_no_command(self) -> None:
         """A denied call never reaches the kernel."""
         with self.assertRaises(ToolError) as ctx:
-            tools.block_client(client="lab-laptop-3", target="internet")
-        self.assertIn("Denied by policy [R-role-class]", str(ctx.exception))
+            tools.limit_bandwidth(client="lab-laptop-3", download_kbit=1000, upload_kbit=1000)
+        self.assertIn("Denied by policy [R-rate-range]", str(ctx.exception))
         self.assertEqual(self.runner.commands, [])
 
     def test_missing_token_is_denied(self) -> None:

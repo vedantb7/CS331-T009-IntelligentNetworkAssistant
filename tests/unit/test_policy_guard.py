@@ -161,14 +161,17 @@ class TestServiceAdapter(unittest.TestCase):
         self.assertTrue(ev("get_status", role="viewer")[0])
 
     def test_resolved_identity_is_cross_checked(self):
+        # Admin laptop's MAC behind an unexpected IP (it has fixed IP .2): refused.
         d = integration.evaluate_policy_decision(
             "kick_client", "192.168.50.60", role="admin", client="laptop-x",
             client_mac="aa:bb:cc:dd:ee:01")
-        self.assertEqual(d.rule, "R-protected")
+        self.assertFalse(d.allowed)
+        self.assertIn(d.rule, ("R-protected", "R-identity-conflict"))
+        # A registered client's MAC: allowed, resolved to that client.
         d = integration.evaluate_policy_decision(
             "limit_bandwidth", "192.168.50.60", role="operator", download_kbit=5000,
             upload_kbit=5000, client_mac="aa:bb:cc:dd:ee:03")
-        self.assertEqual(d.rule, "R-role-class")
+        self.assertTrue(d.allowed, d.reason)
 
     def test_get_tools_for_role(self):
         self.assertEqual(integration.get_tools_for_role("Viewer"), ["get_status"])

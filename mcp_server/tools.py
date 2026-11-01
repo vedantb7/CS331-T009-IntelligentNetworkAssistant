@@ -14,9 +14,11 @@ Every call passes through the same server-side pipeline before anything runs:
 1. The MCP SDK has already checked the arguments against the tool's inputSchema
    (patterns and ranges declared in server.py); bad input never reaches here.
 2. PolicyGuard.check(): role token -> role -> policy engine -> decision written
-   to the policy audit log. It fails closed. The token is a connection
-   credential taken from the server's environment (INA_ROLE_TOKEN), as the MCP
-   spec prescribes for stdio; the AI never supplies or chooses a role.
+   to the policy audit log. It fails closed. Over Streamable HTTP the token is
+   the request's bearer token (already verified by the SDK's auth middleware,
+   see auth.py); over stdio it is taken from the server's environment
+   (INA_ROLE_TOKEN), as the MCP spec prescribes. The AI never supplies or
+   chooses a role.
 3. Only if allowed: the command runs, using the role the token resolved to.
    The unprivileged server never executes it itself: 'default_service' is a
    NetctlService, which hands it to the root-only 'sudo ina-netctl' boundary,
@@ -37,7 +39,14 @@ the command line or its output.
 from __future__ import annotations
 
 import os
+from contextvars import ContextVar
 from typing import Any, Callable, Dict, Mapping, Optional, TypeVar
+
+try:
+    from mcp.server.auth.middleware.auth_context import get_access_token
+except ImportError:
+    def get_access_token():  # type: ignore[no-redef]
+        return None
 
 try:
     from mcp.server.mcpserver.exceptions import ToolError
@@ -75,6 +84,12 @@ T = TypeVar("T")
 # Environment variable carrying the caller's role token (stdio credential).
 TOKEN_ENV = "INA_ROLE_TOKEN"
 
+# Set by the HTTP server: the token must come from the request, never the environment.
+REQUIRE_REQUEST_TOKEN = False
+
+# Peer IP of the current HTTP request (set by server.build_http_app's middleware).
+CLIENT_ADDRESS: ContextVar[Optional[str]] = ContextVar("ina_client_address", default=None)
+
 # Errors raised after the command started; everything else means nothing ran.
 # Their raw text can carry command lines and stderr, so the caller (and the LLM)
 # only gets a fixed summary plus the request ID; the full detail is in the
@@ -105,6 +120,23 @@ def get_guard() -> PolicyGuard:
     return _guard
 
 
+def _caller_token() -> str:
+    """The caller's role token: the HTTP request's bearer token, else (stdio) the environment."""
+    access = get_access_token()
+    if access is not None:
+        return access.token
+    return "" if REQUIRE_REQUEST_TOKEN else os.environ.get(TOKEN_ENV, "")
+
+
+def _caller_address() -> Optional[str]:
+    """IP the request came from: the HTTP peer, else the SSH client (stdio over SSH)."""
+    address = CLIENT_ADDRESS.get()
+    if address:
+        return address
+    ssh = os.environ.get("SSH_CLIENT", "").split()
+    return ssh[0] if ssh and not REQUIRE_REQUEST_TOKEN else None
+
+
 def _error_text(err: INAError, request_id: str) -> str:
     for error_cls, summary in _FAILURE_SUMMARIES:
         if isinstance(err, error_cls):
@@ -120,7 +152,8 @@ def _execute(
 ) -> T:
     """Authorize one tool call with the policy guard, then run it with the resolved role."""
     guard = get_guard()
-    result = guard.check(os.environ.get(TOKEN_ENV, ""), tool, arguments, context=context)
+    result = guard.check(_caller_token(), tool, arguments, context=context,
+                         client_address=_caller_address())
     if not result.allowed:
         decision = result.decision
         raise ToolError(f"Denied by policy [{decision.rule}]: {decision.reason}")

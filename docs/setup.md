@@ -390,35 +390,88 @@ sudo ina-netctl sync-devices          # writes /etc/ina/dhcp-hosts, binds fixed 
 
 `sync-devices` refuses to run while example MACs remain. Devices pick up their new name at their next DHCP renewal; reconnecting them (or `kick_client`) makes it immediate. Until then INA still finds a registered device by its MAC.
 
-### 15.5 Role tokens and operator access
+### 15.5 Roles: granted manually, per person, bound to a device
 
-Create one random token per role, give the plain tokens to the people who need them, and store only their SHA-256 hashes on the Pi:
+Every device that joins `INA-Router` is a normal **client**. It has no role and cannot use the assistant, and operators and admins may act on it. Only devices you list as `protected` in `devices.yaml` are exempt from changes (the router, the admins' own laptops).
+
+A **role** (admin, operator or viewer) is given by hand to a named person and bound to one registered device. The person's token works only from that device's fixed IP, which nftables anti-spoofing ties to its MAC.
+
+1. Register the person's device with a fixed IP. For an admin laptop also mark it `protected`, so nobody can cut it off:
+
+   ```yaml
+   # /opt/ina/inav2/policy/devices.yaml
+   - {name: admin-laptop, mac: "<its MAC>", class: protected, ip: "192.168.50.2"}
+   ```
+
+   ```bash
+   sudo ina-netctl sync-devices          # reservation + MAC<->IP binding; reconnect the laptop afterwards
+   ```
+
+2. Create the (empty) grants file once, then grant the role:
+
+   ```bash
+   sudo install -o root -g ina -m 0640 /dev/null /etc/ina/grants.json
+   sudo ina-netctl roles grant dhruv admin --device admin-laptop
+   #   dhruv now has role 'admin', usable only from device 'admin-laptop'.
+   #   Token (shown once - give it to dhruv privately):
+   #     Xy9...
+   ```
+
+3. Manage grants at any time. Changes apply on the next request, with no restart:
+
+   ```bash
+   sudo ina-netctl roles list            # names, roles, devices (never the tokens)
+   sudo ina-netctl roles rotate dhruv    # new token; the old one stops working
+   sudo ina-netctl roles revoke dhruv
+   ```
+
+Grants are stored as SHA-256 hashes only, and every grant/rotate/revoke is written to the audit log. The `ina` service account cannot run `roles` commands, even though it may use `sudo ina-netctl`. A token used from any other device is refused (`R-token-device`), and a role holder cannot block, limit, kick or ban the device their own role is bound to (`R-self-device`).
+
+### 15.6 TLS certificate and the MCP server (Streamable HTTP)
+
+The MCP server runs permanently on the Pi as the unprivileged `ina` user. It speaks MCP Streamable HTTP over TLS on `https://192.168.50.1:8443/mcp`: one POST per request, JSON responses, no sessions. Every request carries the caller's role token as `Authorization: Bearer <token>`. Missing or wrong tokens get `401` before any MCP processing, and requests with a foreign `Origin` or `Host` header are refused (DNS-rebinding protection).
+
+Create a self-signed certificate for the Pi's AP address, then install and start the service:
 
 ```bash
-for role in admin operator viewer; do
-  t=$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')
-  echo "$role token (give to the $role, store safely): $t"
-  echo "INA_$(echo $role | tr a-z A-Z)_TOKEN_SHA256=$(printf %s "$t" | sha256sum | cut -d' ' -f1)" | sudo tee -a /etc/ina/mcp.env >/dev/null
-done
-sudo chown root:ina /etc/ina/mcp.env && sudo chmod 0640 /etc/ina/mcp.env
+sudo install -d -o root -g ina -m 0750 /etc/ina/tls
+sudo openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 825 \
+     -subj "/CN=ina-router" \
+     -addext "subjectAltName=IP:192.168.50.1,DNS:ina-router,DNS:ina-router.local" \
+     -keyout /etc/ina/tls/server.key -out /etc/ina/tls/server.crt
+sudo chown root:ina /etc/ina/tls/server.key && sudo chmod 0640 /etc/ina/tls/server.key
+sudo chmod 0644 /etc/ina/tls/server.crt
+
+sudo install -m 0644 config/systemd/ina-mcp.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ina-mcp.service
+systemctl is-active ina-mcp.service       # active
 ```
 
-For each operator laptop, add one line to `~ina/.ssh/authorized_keys` (owned by `ina`, mode 0600). The key is bound to a role through its token:
+On each operator laptop (connected to `INA-Router`), copy the certificate once and pin it:
 
-```text
-restrict,command="INA_ROLE_TOKEN=<operator-token> /usr/local/bin/ina-mcp" ssh-ed25519 AAAA... operator-laptop
+```bash
+scp team009@ina-router.local:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt
+export INA_ROLE_TOKEN=<your token from 'roles grant' (15.5)>
+python -m assistant --server mcp --mcp-url https://192.168.50.1:8443/mcp --mcp-ca ~/.config/ina/ina-router.crt "list devices"
 ```
 
-On the laptop: `python -m assistant --server mcp --mcp-command "ssh ina@ina-router"`.
+`INA_MCP_URL` and `INA_MCP_CA` can replace the two flags. Without the right certificate the client refuses to connect ("TLS certificate is not trusted"). A wrong token fails with "the server refused the request".
 
-### 15.6 Verify the installation
+Clients that INA has blocked from the gateway or isolated cannot reach this port: the filter table rejects their traffic to the Pi, except DHCP and DNS.
+
+(Optional, instead of HTTP: stdio over SSH through `/usr/local/bin/ina-mcp` as an SSH forced command, see `config/scripts/ina-mcp`.)
+
+### 15.7 Verify the installation
 
 ```bash
 sudo -u ina sudo -n /usr/local/sbin/ina-netctl --json --role viewer status --   # {"ok": true, ...}
 sudo -u ina nft list ruleset 2>&1 | head -1                                     # must FAIL: 'ina' has no privileges
 sudo -u ina sudo -n /usr/sbin/nft list ruleset 2>&1 | head -1                   # must FAIL: only ina-netctl is allowed
 sudo nft list chain inet ina_filter forward | grep -c '@'                       # > 0: filter rules loaded
-systemctl is-active ina-reconcile.service ina-expire.timer                      # active, active
+systemctl is-active ina-reconcile.service ina-expire.timer ina-mcp.service     # active x3
+sudo ina-netctl roles list                                                      # the people you granted roles to
+curl -s -o /dev/null -w "%{http_code}\n" --cacert /etc/ina/tls/server.crt -X POST \
+     -H "Content-Type: application/json" -d '{}' https://192.168.50.1:8443/mcp    # 401 (no token)
 ```
 
 Then run the functional check from a client (here `guest-phone`, registered in §15.4):

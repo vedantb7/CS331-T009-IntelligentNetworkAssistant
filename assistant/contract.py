@@ -177,3 +177,44 @@ class ToolResult:
                 "decision", "verification", "detail",
             )},
         )
+
+
+# ---------------------------------------------------------------------------
+# Tool definitions for the LLM when no MCP server is attached
+# ---------------------------------------------------------------------------
+# With a live server (McpTransport) the LLM is given the server's own tools/list
+# schemas instead; these mirror them for the built-in mock network only.
+
+_CLIENT = {"type": "string", "description": "Client name (e.g. 'guest-phone') or IPv4 in 192.168.50.0/24."}
+_CLIENT_OR_MAC = {"type": "string", "description": "Client name, IPv4 in 192.168.50.0/24, or MAC address."}
+_TARGET = {"type": "string", "description": "Another client, or 'gateway', 'internet' or 'all'."}
+_KBIT = {"type": "integer", "minimum": 256, "maximum": 20000,
+         "description": "Rate in kbit/s (1000 = 1 Mbit/s)."}
+
+
+def _tool(name: str, description: str, properties: Dict[str, Any], required: List[str]) -> Dict[str, Any]:
+    return {"name": name, "description": description,
+            "input_schema": {"type": "object", "properties": properties, "required": required}}
+
+
+FALLBACK_TOOL_DEFINITIONS: List[Dict[str, Any]] = [
+    _tool("block_client", "Block a client's IPv4 traffic to a target without disconnecting it.",
+          {"client": _CLIENT, "target": _TARGET}, ["client", "target"]),
+    _tool("unblock_client", "Remove a block created by block_client.",
+          {"client": _CLIENT, "target": _TARGET}, ["client", "target"]),
+    _tool("limit_bandwidth", "Cap a client's bandwidth in kbit/s.",
+          {"client": _CLIENT, "download_kbit": _KBIT, "upload_kbit": _KBIT},
+          ["client", "download_kbit", "upload_kbit"]),
+    _tool("remove_bandwidth_limit", "Remove a client's bandwidth limit.", {"client": _CLIENT}, ["client"]),
+    _tool("get_status", "Network status: clients, blocks, limits, bans.", {"client": _CLIENT}, []),
+    _tool("kick_client", "Disconnect a client from Wi-Fi once; it usually reconnects.",
+          {"client": _CLIENT_OR_MAC}, ["client"]),
+    _tool("ban_client", "Keep a device off the Wi-Fi (returns a preview until confirmed).",
+          {"client": _CLIENT_OR_MAC,
+           "duration_minutes": {"type": "integer", "minimum": 1, "maximum": 10080,
+                                "description": "Minutes; omit for a permanent ban."},
+           "reason": {"type": "string", "description": "Short reason for the audit log."}},
+          ["client"]),
+    _tool("unban_client", "Allow a banned device to join the Wi-Fi again.",
+          {"client": _CLIENT_OR_MAC}, ["client"]),
+]

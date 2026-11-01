@@ -326,7 +326,7 @@ class TestMcpToolsThroughBoundary(NetctlFixture):
         with self.assertRaises(ToolError):
             tools.block_client(client="admin-laptop", target="all")
         with self.assertRaises(ToolError):
-            tools.block_client(client="lab-laptop-3", target="all")
+            tools.limit_bandwidth(client="lab-laptop-3", download_kbit=1000, upload_kbit=1000)
         self.assertEqual(self.boundary.calls, [])
         self.assertEqual(self.kernel.commands, [])
 

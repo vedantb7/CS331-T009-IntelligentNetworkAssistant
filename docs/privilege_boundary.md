@@ -5,7 +5,8 @@ Workflow step 4 ("the command is executed") happens in exactly one place: `/usr/
 ```text
 operator laptop                         ina-router (Raspberry Pi 5)
 ───────────────                         ────────────────────────────────────────────────────────────
-assistant ──ssh (stdio MCP)──► ina-mcp  [user ina]
+assistant ══HTTPS POST /mcp══► ina-mcp.service  [user ina, Streamable HTTP, 192.168.50.1:8443]
+  (Authorization: Bearer)      │  bearer token verified (401 if not) → Host/Origin check
                                │  tools/call → inputSchema check (SDK) → PolicyGuard (token → role)
                                │  allowed only:
                                └─► sudo -n /usr/local/sbin/ina-netctl --json --request-id <id> --role <role> <cmd> -- <args>
@@ -33,7 +34,8 @@ If the command log can't be written, the command has already run. Its result is 
 | Boundary client (unprivileged side) | `network/privileged.py` (`NetctlService`) | used by `mcp_server/tools.py` |
 | Boundary command (root side) | `network/netctl.py`, wrapper `config/scripts/ina-netctl` | `/usr/local/sbin/ina-netctl` root:root 0755 |
 | sudo rule | `config/sudoers.d/ina` | `/etc/sudoers.d/ina` 0440 |
-| MCP launcher | `config/scripts/ina-mcp` | `/usr/local/bin/ina-mcp` root:root 0755 |
+| MCP server (Streamable HTTP) | `config/systemd/ina-mcp.service` | `/etc/systemd/system/ina-mcp.service` (runs as `ina`) |
+| Optional stdio-over-SSH launcher | `config/scripts/ina-mcp` | `/usr/local/bin/ina-mcp` root:root 0755 |
 | Runtime directories | `config/tmpfiles.d/ina.conf` | `/etc/tmpfiles.d/ina.conf` |
 
 ## Rules that keep the boundary meaningful
@@ -43,7 +45,7 @@ If the command log can't be written, the command has already run. Its result is 
 3. **Policy is decided before the boundary is crossed.** A call the MCP policy guard denies never reaches `ina-netctl`. The `--role` passed is the role the guard resolved from the caller's token, never one the AI chose. Inside the boundary, the service layer still applies its own protected-device and range checks.
 4. **No fallback.** If `sudo -n` fails (rule missing, password required), the tool returns `Failed: ina-netctl did not return a result (…)`. It never runs the command in-process instead.
 
-Known limit: anyone who controls the `ina` account can run `sudo ina-netctl --role admin …` directly and so skip the MCP policy guard. They are still held by the service layer's checks (protected devices, subnet, rate and ban bounds). Moving the token check inside `ina-netctl` would close this. It needs the token hashes in a root-owned file such as `/etc/ina/tokens.env`, and is planned as a follow-up.
+Known limit: anyone who controls the `ina` account can run `sudo ina-netctl --role admin …` directly and so skip the MCP policy guard. They are still held by the service layer's checks (protected devices, subnet, rate and ban bounds), and they cannot change role grants: `ina-netctl roles` refuses to run when `SUDO_USER` is `ina`. Moving the token check inside `ina-netctl` would close the remaining gap; it is planned as a follow-up.
 
 ## Install and verify on the Pi
 

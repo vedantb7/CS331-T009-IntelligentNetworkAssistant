@@ -4,29 +4,51 @@ __pycache__/
 
 # Virtual environments
 .venv/
+.venv*/
 venv/
+env/
 
-# Environment configuration
+# Packaging / build output
+build/
+dist/
+*.egg-info/
+
+# Environment configuration and secrets (API keys, role tokens)
 .env
 .env.*
 !.env.example
+mcp.env
+
+# TLS material (the Pi's key and certificate are generated per device; setup.md §15.6)
+*.key
+*.pem
+*.crt
 
 # INA runtime state & locks
 state.json
 kick_history.json
 ina.lock
 hostapd.deny
+dhcp-hosts
 
-# Logs
+# Logs, audit trails and assistant transcripts (commands.jsonl, policy_audit.jsonl, --transcript)
 logs/*
 !logs/.gitkeep
 *.log
+*.jsonl
 
-# Testing & coverage
+# Testing, coverage & linters
 .pytest_cache/
 .coverage
+.coverage.*
+htmlcov/
+.tox/
+.mypy_cache/
+.ruff_cache/
 
 # Editor & OS artifacts
 .vscode/
 .idea/
+*.swp
+*~
 .DS_Store

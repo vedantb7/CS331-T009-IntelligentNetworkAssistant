@@ -8,9 +8,14 @@ publishes the patterns and ranges in each tool's inputSchema (the model sees
 them in tools/list) and rejects non-conforming arguments as an ``isError``
 result before the tool function runs.
 
-Run (the role comes from the token, never from a flag the caller picks):
+Transports (the role always comes from a token, never from a flag the caller picks):
 
-    INA_ROLE_TOKEN=<token> python -m inav2.mcp_server.server
+    # Deployment: Streamable HTTP on the Pi, TLS, bearer token per request
+    python -m inav2.mcp_server.server --host 192.168.50.1 --port 8443 \
+        --tls-cert /etc/ina/tls/server.crt --tls-key /etc/ina/tls/server.key
+
+    # Local development: stdio subprocess, token from the environment
+    INA_ROLE_TOKEN=<token> python -m inav2.mcp_server.server --transport stdio
 """
 
 from __future__ import annotations
@@ -77,7 +82,15 @@ SERVER_INSTRUCTIONS = (
     "Blocks and bandwidth limits are independent."
 )
 
-mcp = MCPServer("ina-network", instructions=SERVER_INSTRUCTIONS)
+if MCP_SDK_AVAILABLE:
+    from inav2.mcp_server.auth import RoleTokenVerifier, auth_settings
+
+    # Bearer-token auth applies to the HTTP transport; stdio and in-process
+    # connections carry no HTTP headers and use INA_ROLE_TOKEN instead.
+    mcp = MCPServer("ina-network", instructions=SERVER_INSTRUCTIONS,
+                    token_verifier=RoleTokenVerifier(), auth=auth_settings())
+else:
+    mcp = MCPServer("ina-network", instructions=SERVER_INSTRUCTIONS)
 
 
 # ------------------------------------------------------------------------------
@@ -214,19 +227,105 @@ def get_tools_for_role(role: str = "operator") -> list[str]:
     return [t for t in policy_tools_for_role(role) if t != "update_policy"]
 
 
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+
+
+def build_http_app(host: str, port: int, extra_hosts: Optional[list] = None):
+    """The Streamable HTTP ASGI app: single /mcp endpoint, POST only.
+
+    stateless_http + json_response: no sessions and no SSE streams, the
+    lightest mode, and the shape of revision 2026-07-28 (sessions removed).
+    DNS-rebinding protection: the Host header must name this server, and a
+    request carrying an Origin header is refused (403); CLI clients send none.
+    """
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    names = [host, *(extra_hosts or [])]
+    allowed_hosts = [n for name in names for n in (name, f"{name}:{port}")]
+    security = TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=allowed_hosts,
+        allowed_origins=[],
+    )
+    app = mcp.streamable_http_app(
+        stateless_http=True,
+        json_response=True,
+        transport_security=security,
+        host=host,
+    )
+    return _ClientAddressMiddleware(app)
+
+
+class _ClientAddressMiddleware:
+    """Records each HTTP request's peer IP for the policy guard (device-bound grants).
+
+    The address is the TCP peer, never a header: uvicorn runs with
+    proxy_headers=False, so X-Forwarded-For cannot fake it.
+    """
+
+    def __init__(self, app) -> None:
+        self.app = app
+
+    async def __call__(self, scope, receive, send) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        peer = scope.get("client")
+        token = tools.CLIENT_ADDRESS.set(peer[0] if peer else None)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            tools.CLIENT_ADDRESS.reset(token)
+
+
+def serve_http(host: str, port: int, tls_cert: Optional[str] = None, tls_key: Optional[str] = None,
+               allow_plain_http: bool = False, extra_hosts: Optional[list] = None) -> None:
+    """Run the Streamable HTTP server (blocking)."""
+    import uvicorn
+
+    if (tls_cert is None) != (tls_key is None):
+        raise SystemExit("--tls-cert and --tls-key must be given together")
+    if tls_cert is None and host not in _LOOPBACK and not allow_plain_http:
+        raise SystemExit(
+            f"Refusing to serve plain HTTP on {host}: bearer tokens would cross the network "
+            "unencrypted. Pass --tls-cert/--tls-key (or --allow-plain-http for a lab)."
+        )
+    # Over HTTP the token comes from each request; never fall back to one in the environment.
+    os.environ.pop(tools.TOKEN_ENV, None)
+    tools.REQUIRE_REQUEST_TOKEN = True
+    uvicorn.run(build_http_app(host, port, extra_hosts), host=host, port=port,
+                ssl_certfile=tls_cert, ssl_keyfile=tls_key, log_level="warning",
+                proxy_headers=False)  # the peer address binds role tokens; never trust headers
+
+
 def main() -> None:
-    """Entrypoint for starting the MCP server over stdio."""
+    """Entrypoint: Streamable HTTP (default) or stdio."""
     parser = argparse.ArgumentParser(
         description="INA MCP Network Enforcement Server",
-        epilog=f"The caller's role token is read from ${tools.TOKEN_ENV} (stdio credential).",
+        epilog="HTTP: role token per request (Authorization: Bearer). "
+               f"stdio: role token from ${tools.TOKEN_ENV}.",
     )
-    parser.parse_args()
+    parser.add_argument("--transport", choices=["streamable-http", "stdio"], default="streamable-http")
+    parser.add_argument("--host", default="127.0.0.1", help="Address to bind (HTTP; default 127.0.0.1)")
+    parser.add_argument("--port", type=int, default=8000, help="Port to bind (HTTP; default 8000)")
+    parser.add_argument("--tls-cert", default=None, help="TLS certificate (PEM) for HTTPS")
+    parser.add_argument("--tls-key", default=None, help="TLS private key (PEM) for HTTPS")
+    parser.add_argument("--allowed-host", action="append", default=[],
+                        help="Extra Host header name clients may use, e.g. ina-router (repeatable)")
+    parser.add_argument("--allow-plain-http", action="store_true",
+                        help="Allow HTTP without TLS on a non-loopback address (lab only)")
+    args = parser.parse_args()
 
-    if not os.environ.get(tools.TOKEN_ENV):
-        # Not fatal: every call will be denied with R-token, which the client can report.
-        print(f"warning: {tools.TOKEN_ENV} is not set; all tool calls will be denied.",
-              file=sys.stderr)
-    mcp.run()
+    if args.transport == "stdio":
+        if not os.environ.get(tools.TOKEN_ENV):
+            # Not fatal: every call will be denied with R-token, which the client can report.
+            print(f"warning: {tools.TOKEN_ENV} is not set; all tool calls will be denied.",
+                  file=sys.stderr)
+        mcp.run()
+        return
+    if not MCP_SDK_AVAILABLE:
+        raise SystemExit("The MCP Python SDK is required for the HTTP transport (pip install -r requirements.txt).")
+    serve_http(args.host, args.port, args.tls_cert, args.tls_key, args.allow_plain_http, args.allowed_host)
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from datetime import datetime, timezone
 from typing import List, Optional
@@ -48,6 +49,7 @@ from inav2.network.bandwidth import (
     ensure_tc_infrastructure,
     remove_bandwidth_limit_rules,
 )
+from inav2.network.audit import append_audit_entry
 from inav2.network.devices import load_devices, sync_antispoof_sets, sync_devices
 from inav2.network.service import (
     default_service,
@@ -60,6 +62,41 @@ from inav2.network.wireless import (
 )
 
 ROLES = ("admin", "operator", "viewer")
+
+# The unprivileged service account may run ina-netctl through sudo, but must
+# never manage roles (it would be able to grant itself admin).
+SERVICE_USER = os.environ.get("INA_SERVICE_USER", "ina")
+
+
+def _run_roles(parsed: argparse.Namespace) -> dict:
+    """Role grants: manual, admin-only (never through the service account's sudo rule)."""
+    from inav2.policy import grants as grants_mod
+
+    if os.environ.get("SUDO_USER") == SERVICE_USER:
+        raise PermissionError(
+            f"role grants cannot be changed through the '{SERVICE_USER}' service account; "
+            "an administrator must run this on the Pi")
+    cmd = parsed.roles_command
+    if cmd == "list":
+        return {"grants": [g.public() for g in grants_mod.load_grants()]}
+    if cmd == "grant":
+        grant, token = grants_mod.grant(parsed.person, parsed.role_name, parsed.device)
+        result = {**grant.public(), "token": token}
+    elif cmd == "rotate":
+        grant, token = grants_mod.rotate(parsed.person)
+        result = {**grant.public(), "token": token}
+    elif cmd == "revoke":
+        removed = grants_mod.revoke(parsed.person)
+        result = {"name": parsed.person, "revoked": removed is not None}
+    else:
+        raise ValueError(f"Unknown roles command: {cmd}")
+    append_audit_entry(
+        caller_role=os.environ.get("SUDO_USER") or "root", action=f"roles_{cmd}",
+        client=parsed.person,
+        details={k: v for k, v in result.items() if k != "token"},
+        status="success",
+    )
+    return result
 
 
 def reconcile(deny_file: Optional[str] = None, runner=None) -> int:
@@ -153,6 +190,22 @@ def _dump_result(res: object) -> str:
     return json.dumps(_result_dict(res), indent=2)
 
 
+def _print_roles(cmd: str, res: dict) -> None:
+    if cmd == "list":
+        rows = res["grants"]
+        if not rows:
+            print("No roles granted. Every device is a normal client.")
+        for g in rows:
+            print(f"{g['name']:<16} {g['role']:<9} device={g['device']:<16} "
+                  f"token={g['token_id']}...  granted {g['granted_at']}")
+    elif cmd in ("grant", "rotate"):
+        print(f"{res['name']} now has role '{res['role']}', usable only from device '{res['device']}'.")
+        print(f"Token (shown once - give it to {res['name']} privately):")
+        print(f"  {res['token']}")
+    else:
+        print(f"Role of {res['name']} revoked." if res["revoked"] else f"{res['name']} had no role.")
+
+
 def _run_command(parsed: argparse.Namespace) -> object:
     """Execute one parsed command through the service layer and return its result."""
     role = parsed.role
@@ -182,6 +235,8 @@ def _run_command(parsed: argparse.Namespace) -> object:
         return {"expired": default_service.expire_bans()}
     if parsed.command == "status":
         return default_service.status(parsed.client, role=role)
+    if parsed.command == "roles":
+        return _run_roles(parsed)
     if parsed.command == "sync-devices":
         return sync_devices(runner=default_service.runner,
                             allow_placeholders=parsed.allow_placeholders,
@@ -258,6 +313,20 @@ def main(args: Optional[List[str]] = None) -> int:
     p_sync.add_argument("--no-reload", action="store_true",
                         help="Do not signal dnsmasq to re-read the reservations")
 
+    # roles (admin only, manual): per-person grants bound to one registered device
+    p_roles = subparsers.add_parser("roles", help="Grant, list, rotate or revoke a person's role")
+    roles_sub = p_roles.add_subparsers(dest="roles_command", required=True)
+    r_grant = roles_sub.add_parser("grant", help="Give a person a role, bound to their device")
+    r_grant.add_argument("person", help="Person's name (lower-case, e.g. dhruv)")
+    r_grant.add_argument("role_name", choices=ROLES, metavar="role", help="admin | operator | viewer")
+    r_grant.add_argument("--device", required=True,
+                         help="Registered device (devices.yaml, fixed ip) the role may be used from")
+    roles_sub.add_parser("list", help="Show all grants (never the tokens)")
+    for verb, text in (("rotate", "Issue a new token (old one stops working)"),
+                       ("revoke", "Remove a person's role")):
+        r = roles_sub.add_parser(verb, help=text)
+        r.add_argument("person", help="Person's name")
+
     # reconcile
     subparsers.add_parser("reconcile", help="Re-apply state.json to kernel after boot")
 
@@ -287,6 +356,8 @@ def main(args: Optional[List[str]] = None) -> int:
         print(json.dumps(envelope))
     elif parsed.command in ("expire", "expire-bans"):
         print(f"Expired {res['expired']} ban(s).")
+    elif parsed.command == "roles":
+        _print_roles(parsed.roles_command, res)
     else:
         print(_dump_result(res))
     return 0

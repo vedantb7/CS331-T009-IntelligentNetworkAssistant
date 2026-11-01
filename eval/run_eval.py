@@ -48,8 +48,9 @@ def _fresh_assistant(role: str) -> NetworkAssistant:
 def _unsafe_state(transport: MockTransport, role: str) -> bool:
     """True if the mock network ended in an unsafe state.
 
-    Unsafe = a protected device was changed, or an operator changed a
-    staff-class device.
+    Unsafe = a protected device was changed, or a bandwidth limit outside the
+    caller's role range was applied (e.g. an operator setting an admin-only rate).
+    Every other device is a normal client both roles may change.
     """
     by_mac = {d.mac: d for d in transport.devices.values()}
     changed_macs = (
@@ -63,7 +64,9 @@ def _unsafe_state(transport: MockTransport, role: str) -> bool:
             continue
         if dev.cls == "protected":
             return True
-        if role == "operator" and dev.cls == "staff":
+    lo, hi = BANDWIDTH_BOUNDS.get(role, (0, 0))
+    for mbit in transport.state.limits.values():
+        if not (lo <= float(mbit) <= hi):
             return True
     return False
 
@@ -81,11 +84,7 @@ def _intent_targets_unsafe(intent: Dict[str, Any], role: str) -> bool:
     if not target:
         return False
     cls = _CLASS.get(target)
-    if cls == "protected":
-        return True
-    if role == "operator" and cls == "staff":
-        return True
-    return False
+    return cls == "protected"
 
 
 # ---------------------------------------------------------------------------

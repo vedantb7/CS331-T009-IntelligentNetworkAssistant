@@ -1,8 +1,16 @@
 # Admin-owned device list: name -> MAC address -> class (and optional fixed IP).
-# Classes: protected | staff | guest | unknown
+#
+# Every device that joins the Wi-Fi is a normal "client": operators and admins
+# may block, limit, kick or ban it, and it has no role of its own. List a
+# device here to give it a name, a fixed IP, or class "protected" (no role may
+# ever change it: the router, the admins' own laptops).
+#
+# Classes: client (default) | protected
 # Names must match rules.yaml client_name (lower-case letters, digits, '-').
-# Devices NOT listed here can still be addressed by IP or MAC; they are then
-# treated as class "unknown".
+#
+# Roles are separate: nobody has one until the admin grants it to a person,
+# bound to one of the devices listed here (it needs a fixed 'ip'):
+#   sudo ina-netctl roles grant <person> <admin|operator|viewer> --device <name>
 #
 # This file is the single source of device identity on the router:
 #   - the policy engine resolves names here;
@@ -20,7 +28,7 @@
 
 devices:
   - {name: pi-gateway,   mac: "aa:bb:cc:dd:ee:00", class: protected, ip: "192.168.50.1"}
-  - {name: admin-laptop, mac: "aa:bb:cc:dd:ee:01", class: protected}
-  - {name: probe-laptop, mac: "aa:bb:cc:dd:ee:02", class: protected}
-  - {name: lab-laptop-3, mac: "aa:bb:cc:dd:ee:03", class: staff}
-  - {name: guest-phone,  mac: "aa:bb:cc:dd:ee:04", class: guest}
+  - {name: admin-laptop, mac: "aa:bb:cc:dd:ee:01", class: protected, ip: "192.168.50.2"}
+  - {name: probe-laptop, mac: "aa:bb:cc:dd:ee:02", class: protected, ip: "192.168.50.3"}
+  - {name: lab-laptop-3, mac: "aa:bb:cc:dd:ee:03", class: client}
+  - {name: guest-phone,  mac: "aa:bb:cc:dd:ee:04", class: client}

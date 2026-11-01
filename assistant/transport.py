@@ -62,7 +62,7 @@ class Transport:
 class MockDevice:
     name: str
     mac: str
-    cls: str   # "protected", "staff", "guest", or "unknown"
+    cls: str   # "protected" or "client" (every non-protected device)
 
 
 @dataclass
@@ -90,8 +90,8 @@ DEFAULT_DEVICES = [
     MockDevice("pi-gateway", "aa:bb:cc:dd:ee:00", "protected"),
     MockDevice("admin-laptop", "aa:bb:cc:dd:ee:01", "protected"),
     MockDevice("probe-laptop", "aa:bb:cc:dd:ee:02", "protected"),
-    MockDevice("lab-laptop-3", "aa:bb:cc:dd:ee:03", "staff"),
-    MockDevice("guest-phone", "aa:bb:cc:dd:ee:04", "guest"),
+    MockDevice("lab-laptop-3", "aa:bb:cc:dd:ee:03", "client"),
+    MockDevice("guest-phone", "aa:bb:cc:dd:ee:04", "client"),
 ]
 
 # Bandwidth bounds (Mbit/s), per role. Mirrors the plan's permission table.
@@ -102,8 +102,8 @@ BANDWIDTH_BOUNDS = {
 
 # Which device classes each role may act on for block/limit/restore.
 ROLE_CLASS_ALLOWED = {
-    "operator": {"guest", "unknown"},
-    "admin": {"guest", "unknown", "staff"},
+    "operator": {"client"},
+    "admin": {"client"},
 }
 
 
@@ -404,6 +404,34 @@ def _tidy_tool_error(text: str) -> str:
     return "Invalid arguments: " + "; ".join(problems) if problems else text.strip()
 
 
+class McpConnectionError(RuntimeError):
+    """The assistant could not open a session with the INA MCP server."""
+
+
+def _leaf_errors(err: BaseException):
+    subs = getattr(err, "exceptions", None)
+    if subs:
+        for sub in subs:
+            yield from _leaf_errors(sub)
+    else:
+        yield err
+
+
+def _describe_connection_error(err: BaseException, url: Optional[str]) -> str:
+    """One readable line for the most likely cause (the SDK nests errors in task groups)."""
+    for leaf in _leaf_errors(err):
+        text = str(leaf)
+        if "CERTIFICATE_VERIFY_FAILED" in text:
+            return ("the server's TLS certificate is not trusted; pass --mcp-ca with the Pi's "
+                    "certificate (/etc/ina/tls/server.crt).")
+        if type(leaf).__name__ in ("ConnectError", "ConnectTimeout"):
+            return f"cannot reach {url or 'the server'} ({text})."
+        if type(leaf).__name__ == "MCPError" and "error response" in text:
+            return ("the server refused the request; most likely the role token is missing or "
+                    "invalid (set INA_ROLE_TOKEN).")
+    return f"{type(err).__name__}: {err}"
+
+
 class McpTransport(Transport):
     """Client for the INA MCP server, using the official MCP Python SDK.
 
@@ -413,22 +441,28 @@ class McpTransport(Transport):
     validates the arguments against the published inputSchema, runs the policy
     guard, and only then executes the command.
 
-    By default the server is launched locally as a stdio subprocess
-    (``python -m inav2.mcp_server.server``). Pass ``command`` to launch it
-    elsewhere, e.g. ``"ssh ina@ina-router"`` with the Pi's authorized_keys
-    forcing the server command. Pass ``server`` to connect to an in-process
-    ``MCPServer`` (tests).
+    Three ways to reach the server:
 
-    The role token is a connection credential, not a tool argument: for stdio
-    the MCP specification says credentials come from the environment, so it is
-    handed to the server process as ``INA_ROLE_TOKEN``.
+    - ``url`` (deployment): Streamable HTTP to the Pi, e.g.
+      ``https://192.168.50.1:8443/mcp``. Every request carries
+      ``Authorization: Bearer <token>``; ``ca_file`` pins the Pi's TLS
+      certificate. One HTTP connection is kept open and reused.
+    - ``command`` / default (development): the server launched as a stdio
+      subprocess (``python -m inav2.mcp_server.server --transport stdio``);
+      the token is handed to it as ``INA_ROLE_TOKEN``, as the MCP spec
+      prescribes for stdio.
+    - ``server``: an in-process ``MCPServer`` (tests).
+
+    The role token is a credential, never a tool argument.
     """
 
     def __init__(self,
                  token: Optional[str] = None,
                  command: Optional[str] = None,
                  server: Any = None,
-                 timeout: float = 30.0) -> None:
+                 timeout: float = 30.0,
+                 url: Optional[str] = None,
+                 ca_file: Optional[str] = None) -> None:
         try:
             from anyio.from_thread import start_blocking_portal
             from mcp import Client
@@ -438,8 +472,12 @@ class McpTransport(Transport):
                 "The MCP Python SDK is not installed; run 'pip install -r requirements.txt'."
             ) from err
 
+        self._http_client = None
+        if server is None and url:
+            server = self._http_transport(url, token, ca_file, timeout)
         if server is None:
-            argv = shlex.split(command) if command else [sys.executable, "-m", "inav2.mcp_server.server"]
+            argv = shlex.split(command) if command else [
+                sys.executable, "-m", "inav2.mcp_server.server", "--transport", "stdio"]
             # The SDK gives the child only a minimal default environment, so
             # forward the INA settings (policy files, demo tokens, ...) explicitly.
             env = {k: v for k, v in os.environ.items() if k.startswith("INA_")}
@@ -460,14 +498,35 @@ class McpTransport(Transport):
             self._client = client_cm.__enter__()
             self._client_cm = client_cm
             listed = self._portal.call(self._client.list_tools)
+        except Exception as err:
+            self.close()
+            raise McpConnectionError(_describe_connection_error(err, url)) from err
         except BaseException:
             self.close()
             raise
         self.tools = {tool.name: tool for tool in listed.tools}
         atexit.register(self.close)
 
+    def _http_transport(self, url: str, token: Optional[str], ca_file: Optional[str], timeout: float):
+        """Streamable HTTP transport with the bearer token and (optionally) a pinned CA."""
+        import ssl
+
+        import httpx2
+        from mcp.client.streamable_http import streamable_http_client
+
+        if url.startswith("http://") and not url.startswith(("http://127.0.0.1", "http://localhost")):
+            print("warning: plain HTTP to a remote MCP server sends the role token unencrypted.",
+                  file=sys.stderr)
+        verify: Any = ssl.create_default_context(cafile=ca_file) if ca_file else True
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        self._http_client = httpx2.AsyncClient(
+            headers=headers, verify=verify,
+            timeout=httpx2.Timeout(30.0, read=max(timeout, 30.0)),
+        )
+        return streamable_http_client(url, http_client=self._http_client)
+
     def close(self) -> None:
-        """End the MCP session and stop the server subprocess."""
+        """End the MCP session (and the stdio subprocess or HTTP connection)."""
         if self._closed:
             return
         self._closed = True
@@ -475,6 +534,9 @@ class McpTransport(Transport):
             if self._client_cm is not None:
                 with contextlib.suppress(Exception):
                     self._client_cm.__exit__(None, None, None)
+            if self._http_client is not None:
+                with contextlib.suppress(Exception):
+                    self._portal.call(self._http_client.aclose)
         finally:
             self._portal_cm.__exit__(None, None, None)
 
@@ -581,6 +643,11 @@ class McpTransport(Transport):
             detail=data.get("message") or f"{name} completed.",
             data=data,
         )
+
+    def tool_definitions(self) -> List[Dict[str, Any]]:
+        """The server's tools as listed by tools/list, for the LLM to choose from."""
+        return [{"name": t.name, "description": t.description or "", "input_schema": t.input_schema}
+                for t in self.tools.values()]
 
     def device_names(self) -> List[str]:
         """Names reported by the server's get_status tool."""

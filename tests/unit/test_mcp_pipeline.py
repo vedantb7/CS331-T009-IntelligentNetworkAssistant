@@ -94,10 +94,10 @@ class TestMcpPipelineInProcess(unittest.TestCase):
         self.assertIn("download_kbit", rec.reply)
         self.assertEqual(self.runner.commands, [])
 
-    def test_role_class_denial(self) -> None:
-        rec = self.assistant.handle("block lab-laptop-3")
+    def test_role_limit_denial(self) -> None:
+        rec = self.assistant.handle("limit lab-laptop-3 to 1 mbps")  # below the operator range
         self.assertEqual(rec.outcome, "denied")
-        self.assertEqual(rec.result["decision"]["rule"], "R-role-class")
+        self.assertEqual(rec.result["decision"]["rule"], "R-rate-range")
 
     def test_ban_returns_preview(self) -> None:
         rec = self.assistant.handle("ban guest-phone for 30 minutes")

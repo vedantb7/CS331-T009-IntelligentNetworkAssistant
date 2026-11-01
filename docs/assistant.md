@@ -22,12 +22,16 @@ never runs a command, and only ever sees admin-assigned device names.
 
 ```
 operator types a request
-  -> interpret (LLM if configured, else the rule-based parser)
+  -> LLM (any provider, from .env) is given the MCP server's tools/list schemas
+     and chooses one tool + arguments by native function calling, or asks a
+     question; without an LLM, or if the call fails, the rule-based parser
   -> if unclear: ask a question and stop
-  -> build one tool call + attach the role TOKEN (not a role name)
-  -> send via transport to the MCP server
-  -> server: role from token -> policy ALLOW/DENY -> apply -> verify -> log
-  -> assistant explains the result in plain words
+  -> MCP tools/call over Streamable HTTPS, role TOKEN as the bearer credential
+  -> server: role from token -> policy ALLOW/DENY -> sudo ina-netctl -> apply
+     -> verify -> log
+  -> the structured, command-free result goes back to the same LLM
+     conversation as the tool's result; the LLM writes the reply (shown only
+     if it echoes the real status), else the deterministic template
 ```
 
 ## Files
@@ -38,9 +42,13 @@ assistant/
                  server must match this. The single source of truth for C4.
   intent.py      Deterministic parser. Zero dependencies, always runs, asks
                  instead of guessing. The guaranteed fallback.
-  prompts.py     System prompt + few-shot examples for the LLM backend.
-  llm.py         Backends: RuleBasedBackend (default) and GeminiBackend
-                 (optional, stdlib urllib, used only if LLM_API_KEY is set).
+  prompts.py     Tool-choosing system prompt and reply instructions.
+  llm.py         Backends: RuleBasedBackend (default / fallback),
+                 AnthropicBackend (Claude, official SDK) and
+                 OpenAICompatibleBackend (OpenRouter, Gemini, OpenAI, Groq,
+                 Ollama, any /chat/completions endpoint; stdlib only).
+  config.py      Loads inav2/.env (see .env.example).
+  result_view.py The structured view of a result the LLM is allowed to see.
   transport.py   MockTransport (in-memory full server, for today's demo and the
                  eval) and HttpTransport (Dhruv's real server, once it is up).
   client.py      Orchestrator + CLI. Keeps a transcript.
@@ -65,13 +73,14 @@ python3 -m assistant
 python3 -m assistant "limit guest-phone to 5 mbps"
 python3 -m assistant --role admin "block lab-laptop-3"
 
-# use a real LLM (optional): set these, then run as above
-export LLM_PROVIDER=gemini
-export LLM_API_KEY=...        # a Google AI Studio key
-export LLM_MODEL=gemini-2.0-flash
+# use a real LLM (optional): copy .env.example to .env and set, e.g.
+#   LLM_PROVIDER=anthropic  LLM_API_KEY=sk-ant-...            (pip install anthropic)
+#   LLM_PROVIDER=openrouter LLM_API_KEY=sk-or-...  LLM_MODEL=<provider/model>
+#   LLM_PROVIDER=gemini     LLM_API_KEY=<AI Studio key> LLM_MODEL=<gemini model>
+#   LLM_PROVIDER=ollama     LLM_MODEL=<local model>           (no key)
 
-# point at Dhruv's MCP server once it is up
-python3 -m assistant --server http://192.168.50.1:8000 "list devices"
+# the real Pi (Streamable HTTPS; INA_MCP_URL / INA_MCP_CA / INA_ROLE_TOKEN in .env)
+python3 -m assistant --server mcp "list devices"
 ```
 
 ## Tests and evaluation

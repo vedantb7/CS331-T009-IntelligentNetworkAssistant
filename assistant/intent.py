@@ -34,9 +34,13 @@ class Intent:
     params: Dict[str, Any] = field(default_factory=dict)
     raw_text: str = ""
     confidence: float = 1.0
-    parser: str = "rule_based"       # "rule_based" or "llm"
+    parser: str = "rule_based"       # "rule_based", or "<provider>:<model>" for an LLM
     needs_clarification: bool = False
     clarification: str = ""          # the question to ask, if any
+    # Set when an LLM chose the tool: its exact arguments for the MCP tool, and
+    # the provider conversation so the tool's result can be sent back to it.
+    tool_arguments: Optional[Dict[str, Any]] = None
+    llm_context: Optional[Dict[str, Any]] = field(default=None, repr=False)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -48,6 +52,7 @@ class Intent:
             "parser": self.parser,
             "needs_clarification": self.needs_clarification,
             "clarification": self.clarification,
+            "tool_arguments": dict(self.tool_arguments) if self.tool_arguments is not None else None,
         }
 
 

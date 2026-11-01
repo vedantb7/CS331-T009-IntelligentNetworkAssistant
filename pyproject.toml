@@ -15,6 +15,10 @@ dependencies = [
     "mcp==2.3.0",
 ]
 
+[project.optional-dependencies]
+# Operator laptop only: Claude as the assistant's LLM (LLM_PROVIDER=anthropic).
+claude = ["anthropic>=2.3"]
+
 [tool.pytest.ini_options]
 minversion = "7.0"
 testpaths = ["tests"]

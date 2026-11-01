@@ -57,10 +57,14 @@ LEGACY_ALIASES: Dict[str, str] = {
     LEGACY_RESTORE: ACTION_UNBLOCK,
 }
 
-# Device classes an admin can assign in devices.yaml. Devices that are not in
-# devices.yaml but are addressed by IP or MAC are treated as "unknown".
-DEVICE_CLASSES: Tuple[str, ...] = ("protected", "staff", "guest", "unknown")
-UNKNOWN_CLASS = "unknown"
+# Device classes. Every device on the network is a normal "client" unless the
+# admin lists it in devices.yaml as "protected" (router, admin laptops), which
+# no role may change. Devices addressed by IP or MAC that are not in
+# devices.yaml are clients too.
+CLIENT_CLASS = "client"
+PROTECTED_CLASS = "protected"
+DEVICE_CLASSES: Tuple[str, ...] = (PROTECTED_CLASS, CLIENT_CLASS)
+UNKNOWN_CLASS = CLIENT_CLASS  # class of an unregistered device (kept for older imports)
 
 # --- Rule IDs ----------------------------------------------------------------
 # Deny IDs shared with the assistant's MockTransport (assistant/transport.py),
@@ -73,6 +77,8 @@ R_BAD_RATE = "R-bad-rate"
 R_RATE_RANGE = "R-rate-range"
 R_UNKNOWN_TOOL = "R-unknown-tool"
 R_BAN_DURATION = "R-ban-duration"
+R_TOKEN_DEVICE = "R-token-device"   # role token used from a device other than the one it is bound to
+R_SELF_DEVICE = "R-self-device"     # a role holder acting on their own bound device
 # Other deny IDs
 R_ROLE = "R-role-unknown"
 R_ROLE_ACTION = "R-role-action"
@@ -104,7 +110,7 @@ class Device:
     """A device the policy reasons about.
 
     Registered devices come from the admin-owned ``devices.yaml``. A device
-    addressed only by IP or MAC that is not registered gets class "unknown".
+    addressed only by IP or MAC that is not registered gets class "client".
     """
 
     name: str

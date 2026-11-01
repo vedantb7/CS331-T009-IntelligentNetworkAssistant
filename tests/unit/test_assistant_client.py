@@ -46,13 +46,15 @@ class TestPolicyEnforcement(unittest.TestCase):
         rec = operator().handle("block admin-laptop")
         self.assertEqual(rec.outcome, "denied")
 
-    def test_operator_cannot_touch_staff(self) -> None:
-        rec = operator().handle("block lab-laptop-3")
-        self.assertEqual(rec.outcome, "denied")
+    def test_any_client_device_can_be_acted_on(self) -> None:
+        # Every non-protected device is a normal client, for operators and admins alike.
+        self.assertEqual(operator().handle("block lab-laptop-3").outcome, "success")
+        self.assertEqual(admin().handle("block lab-laptop-3").outcome, "success")
 
-    def test_admin_can_touch_staff(self) -> None:
-        rec = admin().handle("block lab-laptop-3")
-        self.assertEqual(rec.outcome, "success")
+    def test_roles_differ_in_limits_not_in_devices(self) -> None:
+        # roles.yaml: operator rates start at 2 Mbit/s, admin rates at 1 Mbit/s.
+        self.assertEqual(operator().handle("limit guest-phone to 1 mbps").outcome, "denied")
+        self.assertEqual(admin().handle("limit guest-phone to 1 mbps").outcome, "success")
 
     def test_rate_out_of_range_denied(self) -> None:
         rec = operator().handle("limit guest-phone to 50 mbps")

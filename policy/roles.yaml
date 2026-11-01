@@ -5,6 +5,11 @@
 # viewer can only look. The AI model is NOT a role: it only proposes a tool
 # call, and the role comes from the caller's token (policy/authorization.py).
 #
+# Nobody has a role by default - a device on the Wi-Fi is just a client. The
+# admin grants a role to a named person, bound to one registered device:
+#   sudo ina-netctl roles grant <person> <role> --device <device-name>
+# (stored hashed in /etc/ina/grants.json; list / revoke / rotate likewise).
+#
 # actions         which MCP tools (docs/tools.md) the role may call
 # device_classes  which classes of device the role may act on; classes listed
 #                 under protected_classes in rules.yaml can never be granted
@@ -21,7 +26,7 @@
 version: "3.0"
 roles:
   admin:
-    description: "Sets the rules; may act on staff, guest and unknown devices."
+    description: "Full control of client devices; wider rate and ban limits than an operator."
     actions:
       - get_status
       - block_client
@@ -32,12 +37,12 @@ roles:
       - ban_client
       - unban_client
       - update_policy
-    device_classes: [staff, guest, unknown]
+    device_classes: [client]
     bandwidth_kbit: {min: 1000, max: 20000}
     ban: {max_minutes: 10080, allow_permanent: true, unban_scope: any}
 
   operator:
-    description: "Day-to-day requests on guest and unknown devices; cannot change rules."
+    description: "Day-to-day requests on client devices; cannot change rules."
     actions:
       - get_status
       - block_client
@@ -47,7 +52,7 @@ roles:
       - kick_client
       - ban_client
       - unban_client
-    device_classes: [guest, unknown]
+    device_classes: [client]
     bandwidth_kbit: {min: 2000, max: 20000}
     ban: {max_minutes: 60, allow_permanent: false, unban_scope: own_role}
 
