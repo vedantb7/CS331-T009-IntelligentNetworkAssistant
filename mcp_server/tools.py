@@ -17,8 +17,10 @@ Every call passes through the same server-side pipeline before anything runs:
    to the policy audit log. It fails closed. The token is a connection
    credential taken from the server's environment (INA_ROLE_TOKEN), as the MCP
    spec prescribes for stdio; the AI never supplies or chooses a role.
-3. Only if allowed: the authoritative service layer ('network.service') runs
-   the command, using the role the token resolved to.
+3. Only if allowed: the command runs, using the role the token resolved to.
+   The unprivileged server never executes it itself: 'default_service' is a
+   NetctlService, which hands it to the root-only 'sudo ina-netctl' boundary,
+   where the authoritative service layer ('network.service') executes it.
 4. The outcome is recorded against the same request ID.
 
 Service errors are raised as ToolError so MCP transmits them as actionable
@@ -48,13 +50,13 @@ from inav2.mcp_server.schemas import (
     UnbanResult,
     UnblockResult,
 )
+from inav2.network.privileged import default_executor
 from inav2.network.service import (
     INAError,
     KernelMutationError,
     LockTimeoutError,
     VerificationError,
     WirelessControlError,
-    default_service,
 )
 from inav2.policy.audit import AuditError
 from inav2.policy.authorization import AuthConfigError
@@ -70,6 +72,11 @@ TOKEN_ENV = "INA_ROLE_TOKEN"
 _FAILED_ERRORS = (KernelMutationError, LockTimeoutError, VerificationError, WirelessControlError)
 
 _guard: Optional[PolicyGuard] = None
+
+# Executes allowed calls. In the deployed (unprivileged) server this is a
+# NetctlService, so every command runs inside 'sudo ina-netctl'; see
+# network/privileged.py. Tests replace it with an in-process NetworkService.
+default_service = default_executor()
 
 
 def get_guard() -> PolicyGuard:

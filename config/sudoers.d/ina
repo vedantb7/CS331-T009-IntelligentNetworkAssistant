@@ -1,3 +1,8 @@
 # /etc/sudoers.d/ina -- Privilege boundary for INA unprivileged service
+#
+# The MCP server runs as 'ina' and may run exactly one command as root:
+# ina-netctl, a fixed set of typed subcommands (no shell, argparse + schema
+# validation). network/privileged.py calls it as:
+#   sudo -n /usr/local/sbin/ina-netctl --json --role <role> <command> -- <args>
+# Install with: visudo -cf config/sudoers.d/ina && install -m 0440 config/sudoers.d/ina /etc/sudoers.d/ina
 ina ALL=(root) NOPASSWD: /usr/local/sbin/ina-netctl
-

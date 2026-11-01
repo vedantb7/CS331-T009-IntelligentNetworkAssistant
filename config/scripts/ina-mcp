@@ -1,0 +1,25 @@
+#!/bin/sh
+# /usr/local/bin/ina-mcp -- start the INA MCP server on stdio as the unprivileged 'ina' user.
+#
+# Started by sshd through the forced command in ~ina/.ssh/authorized_keys, which
+# also sets the caller's role token, e.g.:
+#   restrict,command="INA_ROLE_TOKEN=<operator-token> /usr/local/bin/ina-mcp" ssh-ed25519 AAAA... operator-laptop
+#
+# /etc/ina/mcp.env (root:ina 0640) holds the token hashes the policy guard checks:
+#   INA_ADMIN_TOKEN_SHA256=...  INA_OPERATOR_TOKEN_SHA256=...  INA_VIEWER_TOKEN_SHA256=...
+#
+# This process never runs network commands itself; allowed calls go through
+# 'sudo -n /usr/local/sbin/ina-netctl' (network/privileged.py).
+set -eu
+
+if [ -r /etc/ina/mcp.env ]; then
+    set -a
+    . /etc/ina/mcp.env
+    set +a
+fi
+
+export INA_EXECUTOR=netctl
+export INA_POLICY_AUDIT_LOG="${INA_POLICY_AUDIT_LOG:-/var/log/ina-mcp/policy_audit.jsonl}"
+
+cd /opt/ina
+exec /opt/ina/venv/bin/python -m inav2.mcp_server.server

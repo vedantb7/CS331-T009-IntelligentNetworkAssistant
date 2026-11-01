@@ -2,7 +2,17 @@
 
 Provides the single privilege boundary command for root-delegated execution
 (e.g. via sudoers: 'ina ALL=(root) NOPASSWD: /usr/local/sbin/ina-netctl').
-Also used by 'ina-reconcile.service' to restore state on boot.
+Every privileged action INA takes - nft, tc, hostapd_cli, and the state, lock
+and audit files under /var - runs inside this command. The unprivileged MCP
+server reaches it through 'network/privileged.py' (NetctlService), which calls
+'sudo -n ina-netctl --json --role <role> <command> -- <args>' and parses the
+JSON envelope printed on stdout:
+
+    {"ok": true,  "result": {...}}                          exit 0
+    {"ok": false, "error": "<ErrorClass>", "message": "..."} exit 1
+
+Also used by 'ina-reconcile.service' to restore state on boot and by
+'ina-expire.service' to lift expired bans.
 """
 
 from __future__ import annotations
@@ -29,9 +39,12 @@ from inav2.network.service import (
     load_state,
 )
 from inav2.network.wireless import (
+    DENY_MAC_FILE,
     deny_acl_add,
     write_deny_file,
 )
+
+ROLES = ("admin", "operator", "viewer")
 
 
 def reconcile(deny_file: Optional[str] = None) -> int:
@@ -94,16 +107,60 @@ def reconcile(deny_file: Optional[str] = None) -> int:
     return 0
 
 
-def _dump_result(res: object) -> str:
+def _result_dict(res: object) -> dict:
+    if isinstance(res, dict):
+        return res
     if hasattr(res, "model_dump"):
-        return json.dumps(res.model_dump(), indent=2)
+        return res.model_dump()
     if hasattr(res, "to_dict"):
-        return json.dumps(res.to_dict(), indent=2)
-    return json.dumps(res.__dict__, indent=2)
+        return res.to_dict()
+    return dict(res.__dict__)
+
+
+def _dump_result(res: object) -> str:
+    return json.dumps(_result_dict(res), indent=2)
+
+
+def _run_command(parsed: argparse.Namespace) -> object:
+    """Execute one parsed command through the service layer and return its result."""
+    role = parsed.role
+    if parsed.command == "block":
+        return default_service.block(parsed.client, parsed.target, role=role)
+    if parsed.command == "unblock":
+        return default_service.unblock(parsed.client, parsed.target, role=role)
+    if parsed.command == "limit":
+        return default_service.limit(parsed.client, parsed.download_kbit, parsed.upload_kbit, role=role)
+    if parsed.command == "unlimit":
+        return default_service.remove_limit(parsed.client, role=role)
+    if parsed.command == "kick":
+        return default_service.kick(parsed.client, role=role)
+    if parsed.command == "ban":
+        return default_service.ban(
+            parsed.client,
+            duration_minutes=parsed.minutes,
+            reason=parsed.reason,
+            confirm=parsed.yes,
+            role=role,
+        )
+    if parsed.command == "unban":
+        return default_service.unban(parsed.client, role=role)
+    if parsed.command == "ban-owner":
+        return {"banned_by_role": default_service.ban_owner_role(parsed.client)}
+    if parsed.command in ("expire", "expire-bans"):
+        return {"expired": default_service.expire_bans()}
+    if parsed.command == "status":
+        return default_service.status(parsed.client, role=role)
+    raise ValueError(f"Unknown command: {parsed.command}")
 
 
 def main(args: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(prog="ina-netctl", description="INA Network Control CLI")
+    parser.add_argument("--json", action="store_true",
+                        help="Print a JSON envelope ({ok, result} or {ok, error, message}) on stdout")
+    parser.add_argument("--role", choices=ROLES, default="admin",
+                        help="Role whose rules the service layer applies (default: admin, "
+                             "for the root administrator; the MCP server passes the role "
+                             "its policy guard resolved from the caller's token)")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     # block
@@ -141,6 +198,10 @@ def main(args: Optional[List[str]] = None) -> int:
     p_unban = subparsers.add_parser("unban", help="Remove a MAC ban")
     p_unban.add_argument("client", help="Client name, IP or MAC")
 
+    # ban-owner (read-only; trusted context for the policy guard's unban check)
+    p_owner = subparsers.add_parser("ban-owner", help="Show which role created a client's ban")
+    p_owner.add_argument("client", help="Client name, IP or MAC")
+
     # expire / expire-bans
     subparsers.add_parser("expire", help="Remove bans whose expiry has passed")
     subparsers.add_parser("expire-bans", help="Remove bans whose expiry has passed (alias for expire)")
@@ -154,48 +215,25 @@ def main(args: Optional[List[str]] = None) -> int:
 
     parsed = parser.parse_args(args)
 
+    if parsed.command == "reconcile":
+        return reconcile()
+
     try:
-        if parsed.command == "block":
-            res = default_service.block(parsed.client, parsed.target)
-            print(_dump_result(res))
-        elif parsed.command == "unblock":
-            res = default_service.unblock(parsed.client, parsed.target)
-            print(_dump_result(res))
-        elif parsed.command == "limit":
-            res = default_service.limit(parsed.client, parsed.download_kbit, parsed.upload_kbit)
-            print(_dump_result(res))
-        elif parsed.command == "unlimit":
-            res = default_service.remove_limit(parsed.client)
-            print(_dump_result(res))
-        elif parsed.command == "kick":
-            res = default_service.kick(parsed.client, role="admin")
-            print(_dump_result(res))
-        elif parsed.command == "ban":
-            res = default_service.ban(
-                parsed.client,
-                duration_minutes=parsed.minutes,
-                reason=parsed.reason,
-                confirm=parsed.yes,
-                role="admin",
-            )
-            print(_dump_result(res))
-        elif parsed.command == "unban":
-            res = default_service.unban(parsed.client, role="admin")
-            print(_dump_result(res))
-        elif parsed.command in ("expire", "expire-bans"):
-            count = default_service.expire_bans()
-            print(f"Expired {count} ban(s).")
-        elif parsed.command == "status":
-            res = default_service.status(parsed.client)
-            print(_dump_result(res))
-        elif parsed.command == "reconcile":
-            return reconcile()
+        res = _run_command(parsed)
     except Exception as err:
-        print(f"Error: {err}", file=sys.stderr)
+        if parsed.json:
+            print(json.dumps({"ok": False, "error": type(err).__name__, "message": str(err)}))
+        else:
+            print(f"Error: {err}", file=sys.stderr)
         return 1
 
+    if parsed.json:
+        print(json.dumps({"ok": True, "result": _result_dict(res)}))
+    elif parsed.command in ("expire", "expire-bans"):
+        print(f"Expired {res['expired']} ban(s).")
+    else:
+        print(_dump_result(res))
     return 0
-
 
 
 if __name__ == "__main__":
