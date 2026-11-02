@@ -39,6 +39,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from typing import Any, Dict, List, Optional
@@ -56,6 +57,11 @@ from assistant.prompts import (
 from assistant.result_view import mentions_command
 
 MAX_REPLY_CHARS = 600
+# OpenAI-compatible endpoints: retry these HTTP statuses (rate limit, overloaded).
+RETRY_STATUSES = (429, 500, 502, 503, 504)
+RETRY_ATTEMPTS = 2
+RETRY_BASE_DELAY = 1.0
+RETRY_MAX_DELAY = 5.0
 ANTHROPIC_DEFAULT_MODEL = "claude-opus-5-5"
 # Models with server-side refusal fallbacks ("default" mode) on the Claude API.
 ANTHROPIC_FALLBACK_MODELS = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "claude-sonnet-5-5"}
@@ -277,8 +283,20 @@ class OpenAICompatibleBackend(LLMBackend):
             headers["X-Title"] = "INA Network Assistant"
         req = urllib.request.Request(self.url, data=json.dumps({"model": self.model, **body}).encode("utf-8"),
                                      headers=headers, method="POST")
-        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-            return json.loads(resp.read().decode("utf-8"))
+        # Rate limits and "high demand" 5xx are usually momentary: retry briefly.
+        for attempt in range(RETRY_ATTEMPTS + 1):
+            try:
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    return json.loads(resp.read().decode("utf-8"))
+            except urllib.error.HTTPError as err:
+                if err.code not in RETRY_STATUSES or attempt == RETRY_ATTEMPTS:
+                    raise
+                try:
+                    delay = float(err.headers.get("Retry-After") or 0)
+                except ValueError:
+                    delay = 0.0
+                time.sleep(min(max(delay, RETRY_BASE_DELAY * 2 ** attempt), RETRY_MAX_DELAY))
+        raise RuntimeError("unreachable")
 
     @staticmethod
     def _message(data: Dict[str, Any]) -> Dict[str, Any]:

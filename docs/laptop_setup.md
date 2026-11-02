@@ -55,7 +55,7 @@ cd ~/Documents/ina/inav2 && source .venv/bin/activate
 ## 3. Check that everything works (no Pi needed)
 
 ```bash
-python3 tests/run_all_tests.py                     # expect: Ran 332 tests ... OK
+python3 tests/run_all_tests.py                     # expect: SUCCESS: Ran 339 tests cleanly
 python3 -m eval.run_eval                           # expect: 16/16 functional, 0/65 unsafe executed
 python3 -m assistant "limit guest-phone to 5 mbps" # mock network: Done. Limited guest-phone to 5 Mbit/s ...
 python3 -m assistant                               # interactive; type 'exit' to quit
@@ -134,7 +134,8 @@ Your role is bound to this laptop's registered MAC and fixed IP. Make NetworkMan
 ```bash
 nmcli device wifi list | grep INA-Router
 nmcli device wifi connect "INA-Router" password "<AP passphrase>"
-nmcli connection modify "INA-Router" 802-11-wireless.cloned-mac-address stable
+nmcli connection modify "INA-Router" 802-11-wireless.cloned-mac-address stable \
+    connection.autoconnect yes connection.autoconnect-priority 10   # preferred over other Wi-Fi
 nmcli connection down "INA-Router" && nmcli connection up "INA-Router"
 ```
 
@@ -160,8 +161,9 @@ ping -c 3 192.168.50.1 && ping -c 3 8.8.8.8
 
 ```bash
 mkdir -p ~/.config/ina
-scp team009@ina-router.local:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt
-# (or: scp team009@192.168.50.1:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt)
+# /etc/ina/tls is readable only by root and ina, so read the (public) certificate through sudo:
+ssh -t team009@ina-router.local "sudo cat /etc/ina/tls/server.crt" | tr -d '\r' > ~/.config/ina/ina-router.crt
+# (on INA-Router already: use team009@192.168.50.1)
 openssl x509 -in ~/.config/ina/ina-router.crt -noout -subject -ext subjectAltName
 ```
 
@@ -184,6 +186,27 @@ Expected failures, with the cause and the fix in [troubleshooting.md](troublesho
 | "the server refused the request" | Wrong or missing token                  | 13   |
 | `R-token-device`               | The laptop is not on its fixed IP       | 14   |
 | "cannot reach"                   | Service down, or the laptop is blocked  | 15   |
+
+### 5.5 Stay connected after restarts
+
+When the Pi reboots, `INA-Router` disappears for about a minute and NetworkManager falls back to another known network (e.g. the phone hotspot). It does **not** switch back by itself when `INA-Router` returns. Two things handle this:
+
+- **The assistant** reconnects once: if the Pi is unreachable and the laptop is not on `INA_WIFI_CONNECTION` (default `INA-Router`, in `.env`), it runs `nmcli connection up INA-Router` and retries. Set `INA_WIFI_CONNECTION=` (empty) to turn this off.
+- **A user timer** switches back within 30 s even when the assistant is not running. Install it once (no root needed):
+
+```bash
+install -D -m 0755 config/laptop/ina-wifi-prefer.sh      ~/.local/bin/ina-wifi-prefer
+install -D -m 0644 config/laptop/ina-wifi-prefer.service ~/.config/systemd/user/ina-wifi-prefer.service
+install -D -m 0644 config/laptop/ina-wifi-prefer.timer   ~/.config/systemd/user/ina-wifi-prefer.timer
+systemctl --user daemon-reload
+systemctl --user enable --now ina-wifi-prefer.timer
+systemctl --user list-timers ina-wifi-prefer.timer         # next run in < 30 s
+journalctl --user -t ina-wifi-prefer                       # each switch is logged
+```
+
+It only switches when `INA-Router` is actually in range, so the laptop still uses the hotspot while the Pi is off. To stay on another network on purpose, pause it: `systemctl --user stop ina-wifi-prefer.timer` (it starts again at the next login; `disable` to remove it).
+
+Everything else survives restarts on its own: the laptop's MAC (`stable`) and fixed IP `192.168.50.2`, the token in `.env`, and on the Pi the grant, the reservation and the anti-spoofing binding (`ina-reconcile` at boot).
 
 ---
 

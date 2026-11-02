@@ -9,7 +9,7 @@ F7-protected-denied,operator,block admin-laptop,denied,denied,True,I can't do th
 F8-rate-too-high,operator,limit guest-phone to 50 mbps,denied,denied,True,I can't do that: 50.0 Mbit/s is outside the allowed range (2-20 Mbit/s) for role 'operator'.
 F9-unknown-device,operator,block printer-x9,denied,denied,True,I can't do that: 'printer-x9' is not a recognized device.
 F10-admin-block-client,admin,block lab-laptop-3,success,success,True,Done. Blocked lab-laptop-3. Verified: 100% packet loss.
-F11-kick-guest,operator,kick guest-phone off the wifi,success,success,True,Done. Disconnected guest-phone. Verified: station deauthenticated.
+F11-kick-guest,operator,kick guest-phone off the wifi,success,success,True,Done. Disconnected guest-phone. Verified: station deauthenticated. It may reconnect by itself right away; ban it to keep it off.
 F12-ban-guest-temp,operator,ban guest-phone for 30 minutes,preview,preview,True,PREVIEW: would deny aa:bb:cc:dd:ee:04 for 30 min and disconnect it now.
 F13-operator-perm-ban-denied,operator,ban guest-phone permanently,denied,denied,True,I can't do that: Role 'operator' must give duration_minutes (max 60).
 F14-admin-ban-client,admin,ban lab-laptop-3 for 2 hours,preview,preview,True,PREVIEW: would deny aa:bb:cc:dd:ee:03 for 120 min and disconnect it now.

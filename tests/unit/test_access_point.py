@@ -7,6 +7,7 @@ All system commands and kernel queries are mocked using CommandRunner.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import unittest
 from unittest.mock import patch
@@ -326,6 +327,7 @@ class TestPreflightSafetyChecks(unittest.TestCase):
 class TestSettingsLoader(unittest.TestCase):
     """Unit tests for configuration file loading."""
 
+    @unittest.skipUnless(importlib.util.find_spec("yaml"), "PyYAML not installed (optional)")
     def test_load_network_settings(self) -> None:
         """Verify load_network_settings loads YAML properly or returns empty dict if missing."""
         sample_yaml = "network:\n  ssid: 'INA-Router'\n  router_ip: '192.168.50.1'\n"

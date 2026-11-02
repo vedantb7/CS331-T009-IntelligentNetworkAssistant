@@ -58,13 +58,18 @@ class Intent:
 
 # Words that signal each action. Order matters: more specific first.
 _BLOCK_WORDS = ("block", "cut off", "quarantine")
-_UNBLOCK_WORDS = ("unblock", "restore", "allow again", "let back", "reconnect",
-                  "remove the limit", "remove limit", "lift")
+_UNBLOCK_WORDS = ("unblock", "restore", "allow again", "let back", "reconnect", "lift")
 _LIMIT_WORDS = ("limit", "throttle", "cap", "slow down", "slow", "rate limit",
                 "restrict bandwidth", "restrict the bandwidth")
 _LIST_WORDS = ("list", "show", "what devices", "which devices", "who is on",
-               "who's on", "devices", "status of the network", "connected")
+               "who's on", "who all", "who are", "on the network", "devices",
+               "status of the network", "connected")
 
+# Removing a speed limit: checked before unblock and limit, which share the words.
+_UNLIMIT_RE = re.compile(
+    r"\b(unlimit|unthrottle|uncap|full\s+speed"
+    r"|(remove|lift|clear|drop|take|undo|delete|cancel|stop|end)\b.{0,40}?"
+    r"\b(limit\w*|cap|throttl\w*))\b")
 _UNBAN_RE = re.compile(r"\b(unban|allow\s+\S+\s+back\s+on\s+(the\s+)?wi-?fi|let\s+\S+\s+connect\s+again)\b")
 _BAN_RE = re.compile(r"\b(ban|blacklist|never\s+let|stop\s+\S+\s+(from\s+)?connecting|keep\s+\S+\s+off)\b")
 _KICK_RE = re.compile(r"\b(kick|disconnect|deauth|boot\s+\S+\s+off|force\s+\S+\s+to\s+reconnect)\b")
@@ -104,6 +109,104 @@ _STOPWORDS = {
 
 def _contains(text: str, words) -> bool:
     return any(w in text for w in words)
+
+
+# Requests none of the tools can do. Answered directly (no tool call, no LLM call)
+# so a status list is never passed off as the answer.
+_UNSUPPORTED = (
+    (re.compile(r"\b(data\s+)?(quota|data\s+cap|data\s+limit|data\s+allowance|\d+\s*[gm]b\s+of\s+data)\b"
+                r"|\b(give|set|allow)\b.*\b\d+(?:\.\d+)?\s*(gb|gib)\b(?!\s*/\s*s|ps)", re.I),
+     "Data quotas (a cap on how much a device may download) are not supported yet. "
+     "I can limit a device's speed instead, e.g. 'limit dhruv-phone to 5 mbps'."),
+    (re.compile(r"\b(wi-?fi|network|internet)\b.*\b(faster|quicker|speed\s*up|boost|better)\b"
+                r"|\b(make|speed\s*up|boost)\b.*\b(wi-?fi|network|internet)\b", re.I),
+     "I can't make the Wi-Fi itself faster. I can remove a speed limit from a device, or "
+     "limit other devices so one gets more of the bandwidth."),
+    (re.compile(r"\b(password|passphrase|ssid|wifi\s+name|channel|firmware|port\s*forward)", re.I),
+     "I can't change router settings such as the Wi-Fi name, password or channel. I can "
+     "show, block, limit, kick or ban devices."),
+)
+
+
+# Words that must appear for the LLM's choice of a state-changing tool to stand.
+# A tool the request does not ask for (e.g. a speed limit for "give it a 1 GB
+# quota") is refused instead of run. Read-only get_status needs no evidence.
+_TOOL_EVIDENCE = {
+    ToolName.LIMIT_BANDWIDTH.value: r"limit|throttl|\bcap\b|capped|slow|speed|bandwidth|\brate\b|"
+                                    r"restrict|\d\s*(mbps|mbit|kbps|kbit|megabit|mb/s|kb/s|m\b|k\b)|"
+                                    r"down\b|\bup\b|upload|download",
+    ToolName.REMOVE_BANDWIDTH_LIMIT.value: r"limit|throttl|\bcap\b|speed|bandwidth|full\s+speed|"
+                                           r"restriction|uncap",
+    ToolName.BLOCK_CLIENT.value: r"block|\bcut\b|\bstop\b|prevent|\bdeny\b|isolat|quarantin|disallow|"
+                                 r"no\s+internet|offline|talk|reach|access|separate",
+    ToolName.UNBLOCK_CLIENT.value: r"unblock|restore|allow|\blet\b|undo|remove\s+the\s+block|\blift\b|"
+                                   r"re-?enable|back\s+on|reconnect|unisolat|talk\s+again",
+    ToolName.KICK_CLIENT.value: r"kick|disconnect|deauth|\bboot\b|throw|\bdrop\b|force|reconnect",
+    ToolName.BAN_CLIENT.value: r"\bban|blacklist|keep\s+\S+(\s+\S+)?\s+off|never\s+let|"
+                               r"off\s+(the\s+)?wi-?fi|permanent",
+    ToolName.UNBAN_CLIENT.value: r"unban|allow|\blet\b|whitelist|remove\s+the\s+ban|lift|back\s+on|"
+                                 r"rejoin|connect\s+again",
+    # Read-only, but still only for a question about the network, never as a
+    # stand-in answer to a request no tool can do.
+    ToolName.GET_STATUS.value: r"\bwho\b|\bwhat\b|\bwhich\b|\blist\b|\bshow\b|status|connected|online|"
+                               r"offline|\bdevices?\b|\bon\s+the\s+(network|wi-?fi)|limited|blocked|"
+                               r"banned|\bcheck\b|how\s+many|\b(is|are)\b.*\?|\?$",
+}
+
+_TOOL_EVIDENCE[ToolName.LIST_DEVICES.value] = _TOOL_EVIDENCE[ToolName.GET_STATUS.value]
+_TOOL_EVIDENCE[ToolName.BLOCK_DEVICE.value] = _TOOL_EVIDENCE[ToolName.BLOCK_CLIENT.value]
+_TOOL_EVIDENCE[ToolName.RESTORE_DEVICE.value] = _TOOL_EVIDENCE[ToolName.UNBLOCK_CLIENT.value]
+
+NOT_PERFORMABLE = ("That is not an action I can perform. I can show the devices, block or "
+                   "unblock a device, limit its speed or remove a limit, kick it off the "
+                   "Wi-Fi once, or ban and unban it.")
+
+
+def request_asks_for(tool: str, text: str) -> bool:
+    """True if the operator's words actually ask for what ``tool`` does."""
+    pattern = _TOOL_EVIDENCE.get(tool)
+    if pattern is None:
+        return False  # a tool with no known purpose is never run on the model's word
+    return re.search(pattern, text.strip(), re.IGNORECASE) is not None
+
+
+def unsupported_reason(text: str) -> Optional[str]:
+    """A plain-English 'I can't do that' for requests no tool covers, else None."""
+    for rx, reason in _UNSUPPORTED:
+        if rx.search(text):
+            return reason
+    return None
+
+
+# Any number with an optional speed unit; bare numbers take the unit used elsewhere
+# in the request ("5 megabits down and 1 up" -> 5000 and 1000 kbit/s).
+_ANY_RATE_RE = re.compile(
+    r"(?<![\w.-])(\d+(?:\.\d+)?)\s*(gbit/s|gbit|gbps|gb/s|mbit/s|mbits?|mbps|mb/s|megabits?|mb|m|"
+    r"kbit/s|kbits?|kbps|kb/s|kilobits?|kb|k)?(?![\w])",
+    re.IGNORECASE,
+)
+
+
+def stated_rates_kbit(text: str) -> List[int]:
+    """Every speed the operator wrote, in kbit/s (empty if no number has a speed unit)."""
+    found = [(float(m.group(1)), (m.group(2) or "").lower()) for m in _ANY_RATE_RE.finditer(text)]
+    units = [u for _, u in found if u]
+    if not units:
+        return []
+    default = units[-1]
+    rates = []
+    for value, unit in found:
+        unit = unit or default
+        factor = 1_000_000 if unit.startswith("g") else 1 if unit.startswith("k") else 1000
+        rates.append(int(round(value * factor)))
+    return rates
+
+
+def states_ban_duration(text: str) -> bool:
+    """True if the operator said how long (or 'permanently') for a ban."""
+    low = text.lower()
+    return bool(_DURATION_RE.search(low) or _PERMANENT_RE.search(low)
+                or re.search(r"\b(an?\s+(hour|minute|day|week)|indefinitely|for\s+ever|days?|weeks?)\b", low))
 
 
 def _extract_rate(text: str) -> Optional[float]:
@@ -152,9 +255,11 @@ def parse(text: str) -> Intent:
                       clarification="Could you say what you'd like to do?")
 
     # 1. Decide the action.
-    # Check order: unban -> unblock -> ban -> kick -> limit -> block -> list
+    # Check order: unban -> remove limit -> unblock -> ban -> kick -> limit -> block -> list
     if _UNBAN_RE.search(low):
         action = ToolName.UNBAN_CLIENT.value
+    elif _UNLIMIT_RE.search(low):
+        action = ToolName.REMOVE_BANDWIDTH_LIMIT.value
     elif _contains(low, _UNBLOCK_WORDS):
         action = ToolName.UNBLOCK_CLIENT.value
     elif _BAN_RE.search(low):
@@ -217,6 +322,15 @@ def parse(text: str) -> Intent:
                 action=action, raw_text=raw, confidence=0.5,
                 needs_clarification=True,
                 clarification="Which device should I disconnect?",
+            )
+        return Intent(action=action, target=device, raw_text=raw, confidence=0.9)
+
+    if action == ToolName.REMOVE_BANDWIDTH_LIMIT.value:
+        if device is None:
+            return Intent(
+                action=action, raw_text=raw, confidence=0.5,
+                needs_clarification=True,
+                clarification="Which device should I remove the speed limit from?",
             )
         return Intent(action=action, target=device, raw_text=raw, confidence=0.9)
 

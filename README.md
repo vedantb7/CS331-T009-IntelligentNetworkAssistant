@@ -71,7 +71,7 @@ Without an LLM (or if a call fails), the deterministic rule-based parser and rep
 **Talk to the real Pi:**
 
 ```bash
-# .env: INA_MCP_URL=https://192.168.50.1:8443/mcp  INA_MCP_CA=~/.config/ina/ina-router.crt  INA_ROLE_TOKEN=<your token>
+# .env: INA_MCP_URL=https://192.168.50.1:8443/mcp  INA_MCP_CA=/home/<you>/.config/ina/ina-router.crt (absolute)  INA_ROLE_TOKEN=<your token>
 python3 -m assistant --server mcp "list devices"
 ```
 
@@ -110,10 +110,10 @@ Router prerequisites: Raspberry Pi 5, Raspberry Pi OS Lite 64-bit (Debian Trixie
 
 ## 6. Status
 
-The router infrastructure (AP, DHCP, NAT, reboot persistence) is **verified on the Pi**. The application layer is complete and tested:
+The router infrastructure (AP, DHCP, NAT, reboot persistence) is **verified on the Pi**, and the full workflow has **run end to end on the hardware**: natural-language requests on the operator laptop, through an LLM (Gemini) or the rule-based parser, over HTTPS to the Pi's MCP server, policy guard and `ina-netctl`, with real phones as clients.
 
-- **Unit tests:** 332 (mocked kernel).
+- **Unit tests:** 339 (mocked kernel).
 - **Real-kernel namespace lab:** blocks are enforced.
-- **Live HTTPS round trips:** on a laptop.
+- **On the Pi:** blocks, limits, kicks, bans and role grants applied and read back; everything comes back after a reboot.
 
-It has **not yet been run end to end on the Pi hardware**. See [docs/implementation_status.md](docs/implementation_status.md) for the exact state and the open items.
+Still open: throughput and phone-to-phone measurements, and writing the hardware runs up in [docs/testing.md](docs/testing.md). See [docs/implementation_status.md](docs/implementation_status.md) for the exact state.

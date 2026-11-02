@@ -69,6 +69,20 @@ tests/unit/                test_intent.py, test_assistant_client.py,
                            test_verification.py
 ```
 
+## Guards around the LLM's tool call
+
+The server's policy is the safety boundary, but the client also keeps the LLM honest about *what the operator asked*, so a refusal is explained instead of being quietly "fixed":
+
+| Request | Without the guard | Now |
+|---|---|---|
+| No tool can do it (`give dhruv-phone a 1 GB data quota`, `make the wifi faster`, change the Wi-Fi password) | The LLM called `get_status` and the status was shown as the answer | Answered directly (`assistant/intent.py` `unsupported_reason`), no tool and no LLM call |
+| A speed outside the role's range (`limit dhruv-phone to 50 mbps`) | The LLM lowered it to the 20 Mbit/s maximum and it was applied | The operator's own number is sent (`stated_rates_kbit`); the server refuses and says why |
+| `ban dhruv-phone` with no duration | The LLM left the duration out, which means a permanent ban | The assistant asks: permanently, or for how many minutes? |
+
+The prompts (`assistant/prompts.py`, tool rules 9-11 and reply rules 6-8) say the same; the code checks in `NetworkAssistant._vet_llm_call` enforce it whatever the model does. Banned devices stay in the LLM's known-device list (they are off the Wi-Fi but can still be named, e.g. to unban them).
+
+**Kick vs ban.** `kick_client` disconnects a device once; phones usually rejoin within a fraction of a second, so the operator may not notice. The reply says so. Use `ban_client` to keep a device off.
+
 ## How to run
 
 No API key is needed. The default uses the deterministic parser and the

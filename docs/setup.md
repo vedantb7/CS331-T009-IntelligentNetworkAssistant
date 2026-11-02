@@ -153,11 +153,15 @@ Besides the pool (`192.168.50.10–100`, 12 h), gateway and DNS options, the fil
 
 ## 8. Creating the Virtual Interface Script (`ap0`)
 
-Install the interface script:
+Tell NetworkManager to leave `ap0` (and `ifb-ap0`) alone, then install the interface script:
 
 ```bash
+sudo install -o root -g root -m 0644 config/NetworkManager/90-ina-unmanaged.conf /etc/NetworkManager/conf.d/90-ina-unmanaged.conf
+sudo systemctl reload NetworkManager
 sudo install -o root -g root -m 0755 config/scripts/ina-ap-interface.sh /usr/local/sbin/ina-ap-interface.sh
 ```
+
+Without the unmanaged rule, NetworkManager treats `ap0` as its own device, removes `192.168.50.1` at boot, and dnsmasq fails its readiness check (`nmcli device status` shows `ap0` as anything other than `unmanaged`).
 
 It creates `ap0` on the onboard radio if missing (`iw dev wlan0 interface add ap0 type __ap`), assigns `192.168.50.1/24` and sets:
 
@@ -452,7 +456,7 @@ systemctl is-active ina-mcp.service       # active
 On each operator laptop (connected to `INA-Router`), copy the certificate once and pin it:
 
 ```bash
-scp team009@ina-router.local:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt
+ssh -t team009@ina-router.local "sudo cat /etc/ina/tls/server.crt" | tr -d '\r' > ~/.config/ina/ina-router.crt
 export INA_ROLE_TOKEN=<your token from 'roles grant' (15.5)>
 python -m assistant --server mcp --mcp-url https://192.168.50.1:8443/mcp --mcp-ca ~/.config/ina/ina-router.crt "list devices"
 ```

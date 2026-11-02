@@ -154,6 +154,32 @@ class TestMCPServer(unittest.TestCase):
             tools.block_client(client="192.168.50.1", target="internet")
         self.assertIn("protected", str(ctx.exception).lower())
 
+    def _lease_file(self, lines) -> None:
+        path = os.path.join(self.tmp, "dnsmasq.leases")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        self._leases_env = mock.patch.dict(os.environ, {"INA_LEASES_FILE": path})
+        self._leases_env.start()
+        self.addCleanup(self._leases_env.stop)
+
+    def test_unregistered_device_resolved_from_its_lease(self) -> None:
+        """A device only known by its DHCP hostname can be a client and a pair-block target."""
+        self._lease_file(["1793669815 02:00:5e:00:00:70 192.168.50.70 OnePlus-Nord-CE4 01:02",
+                          "1793669505 aa:bb:cc:dd:ee:04 192.168.50.34 guest-phone 01:aa"])
+        self.service.leases_map["oneplus-nord-ce4"] = "192.168.50.70"
+        res = tools.block_client(client="guest-phone", target="oneplus-nord-ce4")
+        self.assertTrue(res.blocked)
+        res = tools.limit_bandwidth(client="oneplus-nord-ce4", download_kbit=2000, upload_kbit=2000)
+        self.assertEqual(res.client_ip, "192.168.50.70")
+
+    def test_unregistered_name_held_by_two_leases_is_refused(self) -> None:
+        """Two devices claiming the same hostname: refuse instead of guessing."""
+        self._lease_file(["1793669815 02:00:5e:00:00:70 192.168.50.70 tablet 01:02",
+                          "1793669816 02:00:5e:00:00:71 192.168.50.71 tablet 01:02"])
+        with self.assertRaises(ToolError) as ctx:
+            tools.block_client(client="tablet", target="internet")
+        self.assertIn("R-unknown-device", str(ctx.exception))
+
     def test_policy_denial_runs_no_command(self) -> None:
         """A denied call never reaches the kernel."""
         with self.assertRaises(ToolError) as ctx:

@@ -98,6 +98,49 @@ class TestNetworkService(unittest.TestCase):
         client_a = next(c for c in status_res.clients if c.client == "laptop-a")
         self.assertIn("phone-b", client_a.blocked_targets)
 
+    def test_status_live_clients_from_leases_stations_and_neighbors(self) -> None:
+        """Without an injected map, status reads the lease file, hostapd and the neighbor table."""
+        leases_file = os.path.join(self.test_dir, "dnsmasq.leases")
+        with open(leases_file, "w", encoding="utf-8") as f:
+            f.write("1793669815 02:00:5e:00:00:70 192.168.50.70 OnePlus-Nord-CE4 01:02\n"
+                    "1793669505 02:00:5e:00:00:19 192.168.50.19 dhruv-phone 01:02\n"
+                    "1793660000 02:11:22:33:44:55 192.168.50.40 old-tablet 01:02\n")
+        neigh = json.dumps([
+            {"dst": "192.168.50.70", "dev": "ap0", "lladdr": "02:00:5e:00:00:70", "state": ["REACHABLE"]},
+            {"dst": "192.168.50.19", "dev": "ap0", "lladdr": "02:00:5e:00:00:19", "state": ["STALE"]},
+        ])
+
+        def runner(args, timeout=5.0):
+            if args[:3] == ["hostapd_cli", "-i", "ap0"] and args[3:] == ["list_sta"]:
+                return 0, "02:00:5e:00:00:70\n02:00:5e:00:00:19\naa:00:00:00:00:09\n", ""
+            if args[:3] == ["ip", "-j", "neigh"]:
+                return 0, neigh, ""
+            return 1, "", "unexpected"
+
+        service = NetworkService(runner=runner, lock_path=self.lock_path, state_path=self.state_path,
+                                 audit_path=self.audit_path, leases_file=leases_file)
+        with open(self.state_path, "w", encoding="utf-8") as f:
+            json.dump({"blocks": [{"client": "dhruv-phone", "target": "internet"}],
+                       "limits": [{"client": "192.168.50.70", "download_kbit": 2000,
+                                   "upload_kbit": 2000},
+                                  {"client": "old-tablet", "client_ip": "192.168.50.40",
+                                   "download_kbit": 1000, "upload_kbit": 1000}]}, f)
+        clients = {c.client: c for c in service.status(role="viewer").clients}
+
+        # A left device is listed only while it still has a restriction (here a limit),
+        # as not associated; the lease-less station is listed by MAC.
+        self.assertEqual(set(clients), {"oneplus-nord-ce4", "dhruv-phone", "aa:00:00:00:00:09",
+                                        "old-tablet"})
+        self.assertFalse(clients["old-tablet"].associated)
+        self.assertEqual(clients["old-tablet"].download_kbit, 1000)
+        self.assertTrue(all(c.associated for n, c in clients.items() if n != "old-tablet"))
+        self.assertEqual(clients["dhruv-phone"].ip, "192.168.50.19")
+        self.assertEqual(clients["dhruv-phone"].neighbor_state, "STALE")
+        self.assertEqual(clients["dhruv-phone"].blocked_targets, ["internet"])
+        self.assertEqual(clients["oneplus-nord-ce4"].download_kbit, 2000)
+        self.assertEqual(service.status(client="dhruv-phone", role="viewer").clients[0].mac,
+                         "02:00:5e:00:00:19")
+
 
 if __name__ == "__main__":
     unittest.main()

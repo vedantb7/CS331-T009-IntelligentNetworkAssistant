@@ -1,0 +1,6 @@
+[Unit]
+Description=Switch the operator laptop back to the INA-Router Wi-Fi when it is in range
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ina-wifi-prefer

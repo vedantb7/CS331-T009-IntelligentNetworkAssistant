@@ -65,6 +65,7 @@ from inav2.mcp_server.schemas import (
     UnbanResult,
     UnblockResult,
 )
+from inav2.network.access_control import DEFAULT_LEASES_FILE
 from inav2.network.command_log import ensure_recording, request_scope, summarize
 from inav2.network.privileged import default_executor
 from inav2.network.service import (
@@ -74,6 +75,7 @@ from inav2.network.service import (
     VerificationError,
     WirelessControlError,
 )
+from inav2.network.wireless import _load_leases
 from inav2.policy.audit import AuditError
 from inav2.policy.authorization import AuthConfigError
 from inav2.policy.config import PolicyConfigError
@@ -144,6 +146,32 @@ def _error_text(err: INAError, request_id: str) -> str:
     return f"Denied: {err}"
 
 
+def _lease_context(arguments: Mapping[str, Any]) -> Dict[str, str]:
+    """Trusted context for names that are not in devices.yaml: their current DHCP lease.
+
+    The policy engine refuses an unregistered name unless the server has
+    resolved it, so look ``client`` and a peer ``target`` up in dnsmasq's lease
+    file (written by the router, not the AI). Registered names still go through
+    the device list, which cross-checks this context; a hostname held by more
+    than one lease is left unresolved (refused) rather than guessed.
+    """
+    leases_file = os.environ.get("INA_LEASES_FILE") or DEFAULT_LEASES_FILE
+    by_name: Dict[str, list] = {}
+    for lease in _load_leases(leases_file):
+        if lease.hostname:
+            by_name.setdefault(lease.hostname.lower(), []).append(lease)
+    context: Dict[str, str] = {}
+    for key, prefix in (("client", "client"), ("target", "target")):
+        value = arguments.get(key)
+        if not isinstance(value, str):
+            continue
+        found = by_name.get(value.strip().lower(), [])
+        if len(found) == 1:
+            context[f"{prefix}_ip"] = found[0].ip_address
+            context[f"{prefix}_mac"] = found[0].mac_address.lower()
+    return context
+
+
 def _execute(
     tool: str,
     arguments: Dict[str, Any],
@@ -152,6 +180,7 @@ def _execute(
 ) -> T:
     """Authorize one tool call with the policy guard, then run it with the resolved role."""
     guard = get_guard()
+    context = {**_lease_context(arguments), **(context or {})}
     result = guard.check(_caller_token(), tool, arguments, context=context,
                          client_address=_caller_address())
     if not result.allowed:

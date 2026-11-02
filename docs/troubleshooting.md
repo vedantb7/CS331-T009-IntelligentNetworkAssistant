@@ -390,7 +390,7 @@ sudo nft list ruleset
 `Could not connect to the INA MCP server: the server's TLS certificate is not trusted; pass --mcp-ca ...`
 
 #### Corrective Actions
-1. Copy the Pi's certificate once: `scp team009@ina-router.local:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt`.
+1. Copy the Pi's certificate once: `ssh -t team009@ina-router.local "sudo cat /etc/ina/tls/server.crt" | tr -d '\r' > ~/.config/ina/ina-router.crt` (`/etc/ina/tls` is readable only by root and `ina`).
 2. Set `INA_MCP_CA` (or `--mcp-ca`) to that file.
 3. The certificate must name the address you connect to. Its SAN includes `IP:192.168.50.1`, `DNS:ina-router` and `DNS:ina-router.local` (setup.md §15.6). Regenerate it if you use another name.
 
@@ -515,3 +515,33 @@ Install `config/hostapd/hostapd.conf.template` (it sets `ctrl_interface=/run/hos
 
 This is intended. Role grants must be managed by an administrator logged in to the Pi (`sudo ina-netctl roles ...` from your own account), never through the `ina` account's sudo rule. Otherwise a compromised MCP server could grant itself a role.
 
+
+### Case 22: After a reboot dnsmasq fails and `ap0` has no `192.168.50.1`
+
+**Symptom:** `systemctl status dnsmasq` shows the `ExecStartPre` readiness check failing; `ip -br addr show ap0` has no IPv4 address; `nmcli device status` lists `ap0` as `disconnected` or `connecting`.
+
+**Cause:** NetworkManager manages `ap0` and flushes the address that `ina-ap-interface.sh` set.
+
+**Fix:**
+
+```bash
+sudo install -o root -g root -m 0644 /opt/ina/inav2/config/NetworkManager/90-ina-unmanaged.conf /etc/NetworkManager/conf.d/
+sudo systemctl reload NetworkManager
+sudo systemctl restart ina-ap-interface hostapd dnsmasq
+nmcli -t -f DEVICE,STATE device | grep ^ap0     # ap0:unmanaged
+```
+
+### Case 23: The assistant "cannot reach" the Pi after the Pi restarted
+
+**Symptom:** `python3 -m assistant --server mcp` prints `cannot reach https://192.168.50.1:8443/mcp`; `nmcli -t -f NAME connection show --active` shows the phone hotspot instead of `INA-Router`.
+
+**Cause:** while the Pi rebooted, the laptop fell back to another Wi-Fi, and NetworkManager does not switch back on its own.
+
+**Fix:** the assistant now reconnects once by itself (`INA_WIFI_CONNECTION`, default `INA-Router`). Install the `ina-wifi-prefer` user timer ([laptop_setup.md](laptop_setup.md) §5.5) so the laptop also returns without the assistant. By hand:
+
+```bash
+nmcli connection up INA-Router
+ip -4 -br addr show | grep 192.168.50.2
+```
+
+If the laptop *is* on `INA-Router` and it still fails, check the Pi: `ssh team009@192.168.50.1 systemctl is-active ina-mcp`.

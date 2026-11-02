@@ -57,9 +57,12 @@ from inav2.network.bandwidth import (
     limit_bandwidth,
     remove_bandwidth_limit,
 )
+from inav2.network.device_discovery import default_command_runner, parse_ip_neighbors
 from inav2.network.wireless import (
+    AP_INTERFACE,
     DENY_MAC_FILE,
     Station,
+    _load_leases,
     ban_station,
     ensure_not_protected,
     get_station_info,
@@ -913,42 +916,53 @@ class NetworkService:
             banned_macs.add((b.get("mac") or "").lower())
 
         # Build client status list
-        clients_map: Dict[str, ClientStatus] = {}
+        if self.leases_map is not None:
+            # Injected name -> IP map (tests, development): report every entry as present.
+            clients_map: Dict[str, ClientStatus] = {
+                name: ClientStatus(client=name, ip=ip, associated=True, neighbor_state="REACHABLE")
+                for name, ip in self.leases_map.items()
+            }
+        else:
+            clients_map = self._live_clients()
+        if client:
+            clients_map = {k: v for k, v in clients_map.items()
+                           if client.lower() in (k, v.ip, (v.mac or "").lower())}
 
-        # 1. Populate known reservations
-        leases = self.leases_map or {}
-        for name, ip in leases.items():
-            if client and name != client and ip != client:
-                continue
-            clients_map[name] = ClientStatus(
-                client=name,
-                ip=ip,
-                associated=True,
-                neighbor_state="REACHABLE",
-                blocked_targets=[],
-                download_kbit=None,
-                upload_kbit=None,
-                banned=False,
-            )
+        # State entries name a client by reservation name, IP or MAC.
+        def _find(ident: str) -> Optional[ClientStatus]:
+            ident = (ident or "").lower()
+            for c in clients_map.values():
+                if ident and ident in (c.client, c.ip, (c.mac or "").lower()):
+                    return c
+            return None
 
-        # 2. Enrich with blocks from state
+        # A device that is offline (or banned) but still has a block, limit or
+        # ban is listed too, as not associated, so it can still be named.
+        if self.leases_map is None:
+            for entry in [*blocks, *limits, *state.get("bans", [])]:
+                name = (entry.get("client") or "").lower()
+                if not name or _find(name) or _find(entry.get("client_ip") or "") \
+                        or (entry.get("mac") and _find(entry["mac"])):
+                    continue
+                if client and client.lower() not in (name, entry.get("client_ip"), entry.get("mac")):
+                    continue
+                clients_map[name] = ClientStatus(client=name, ip=entry.get("client_ip") or "",
+                                                 mac=entry.get("mac"), associated=False)
+
+        # Enrich with blocks, limits and bans from state
         for b in blocks:
-            c_name = b.get("client", "")
-            if c_name in clients_map:
-                clients_map[c_name].blocked_targets.append(b.get("target", ""))
-
-        # 3. Enrich with limits from state
+            c = _find(b.get("client", ""))
+            if c:
+                c.blocked_targets.append(b.get("target", ""))
         for l in limits:
-            c_name = l.get("client", "")
-            if c_name in clients_map:
-                clients_map[c_name].download_kbit = l.get("download_kbit")
-                clients_map[c_name].upload_kbit = l.get("upload_kbit")
-
-        # 4. Enrich with ban status
+            c = _find(l.get("client", ""))
+            if c:
+                c.download_kbit = l.get("download_kbit")
+                c.upload_kbit = l.get("upload_kbit")
         for b in active_bans:
-            c_name = b.client
-            if c_name in clients_map:
-                clients_map[c_name].banned = True
+            c = _find(b.mac) or _find(b.client)
+            if c:
+                c.banned = True
 
         return StatusResult(
             clients=list(clients_map.values()),
@@ -956,6 +970,47 @@ class NetworkService:
             drift_detected=False,
             message=f"Reported telemetry for {len(clients_map)} clients.",
         )
+
+    def _live_clients(self) -> Dict[str, ClientStatus]:
+        """Clients on the AP now: DHCP leases + hostapd stations + the ap0 neighbor table.
+
+        A client is listed if it holds a lease or is associated. ``associated``
+        is hostapd's view when its control socket answers, otherwise whether the
+        neighbor entry is live.
+        """
+        run = self.runner or default_command_runner
+        leases = _load_leases(self.leases_file)
+
+        stations: Optional[Set[str]] = None
+        code, out, _ = run(["hostapd_cli", "-i", AP_INTERFACE, "list_sta"], 5.0)
+        if code == 0:
+            stations = {l.strip().lower() for l in out.splitlines() if l.count(":") == 5}
+
+        neighbors: Dict[str, str] = {}
+        code, out, _ = run(["ip", "-j", "neigh", "show", "dev", AP_INTERFACE], 5.0)
+        if code == 0:
+            for n in parse_ip_neighbors(out):
+                if n.mac_address:
+                    neighbors[n.mac_address.lower()] = n.state
+
+        clients: Dict[str, ClientStatus] = {}
+        for lease in leases:
+            mac = lease.mac_address.lower()
+            name = (lease.hostname or lease.ip_address).lower()
+            state = neighbors.get(mac)
+            if stations is not None:
+                associated = mac in stations
+            else:
+                associated = state in ("REACHABLE", "DELAY", "PROBE", "STALE")
+            if stations is not None and not associated and state is None:
+                continue  # an old lease of a device that has left
+            clients[name] = ClientStatus(client=name, ip=lease.ip_address, mac=mac,
+                                         associated=associated, neighbor_state=state)
+        for mac in sorted((stations or set()) - {c.mac for c in clients.values()}):
+            # Associated but no lease (yet): report it by MAC.
+            clients[mac] = ClientStatus(client=mac, ip="", mac=mac, associated=True,
+                                        neighbor_state=neighbors.get(mac))
+        return clients
 
 
 

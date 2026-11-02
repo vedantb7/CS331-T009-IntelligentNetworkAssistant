@@ -30,13 +30,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
+from assistant.config import load_env_file
 from assistant.contract import FALLBACK_TOOL_DEFINITIONS, ToolCall, ToolName, ToolResult
+from assistant import intent as intent_mod
 from assistant.intent import Intent
 from assistant.llm import LLMBackend, get_backend
 from assistant.result_view import llm_result_view
@@ -114,12 +118,46 @@ class NetworkAssistant:
         names = self._device_names()
         try:
             return self.backend.interpret(request, names, self._tool_definitions())
-        except Exception:
+        except Exception as err:
             # Any LLM/transport error -> deterministic parser, never a crash.
-            from assistant import intent as intent_mod
+            print(f"warning: LLM unavailable ({_short_error(err)}); using the rule-based parser.",
+                  file=sys.stderr)
             parsed = intent_mod.parse(request)
             parsed.parser = "rule_based_fallback"
             return parsed
+
+    @staticmethod
+    def _vet_llm_call(request: str, intent: Intent) -> Intent:
+        """Hold the LLM's tool call to what the operator actually said.
+
+        The model must not adjust a speed to fit the limits (the server decides
+        and explains), and must not turn a ban without a duration into a
+        permanent one.
+        """
+        args = intent.tool_arguments
+        if args is None:
+            return intent
+        if not intent_mod.request_asks_for(intent.action, request):
+            # The model picked a tool the request does not ask for: never run it.
+            intent.needs_clarification = True
+            intent.clarification = intent_mod.NOT_PERFORMABLE
+            return intent
+        target = args.get("client") or intent.target or "the device"
+        if intent.action == ToolName.LIMIT_BANDWIDTH.value:
+            stated = intent_mod.stated_rates_kbit(request)
+            given = [args.get(k) for k in ("download_kbit", "upload_kbit") if args.get(k) is not None]
+            if stated and any(v not in stated for v in given):
+                if len(set(stated)) == 1:
+                    args["download_kbit"] = args["upload_kbit"] = stated[0]
+                else:
+                    intent.needs_clarification = True
+                    intent.clarification = (f"What download and upload speed should {target} "
+                                            "get, in Mbit/s?")
+        if (intent.action == ToolName.BAN_CLIENT.value and args.get("duration_minutes") is None
+                and not intent_mod.states_ban_duration(request)):
+            intent.needs_clarification = True
+            intent.clarification = f"Ban {target} permanently, or for how many minutes?"
+        return intent
 
     def _build_call(self, intent: Intent, request_id: str) -> ToolCall:
         if intent.tool_arguments is not None:
@@ -211,13 +249,24 @@ class NetworkAssistant:
         proof = ""
         if v and v.measured:
             proof = f" Verified: {v.measured}."
+        if result.tool == ToolName.KICK_CLIENT.value:
+            proof += " It may reconnect by itself right away; ban it to keep it off."
         return f"Done. {result.detail}{proof}"
 
     # -- the main entry point ----------------------------------------------
     def handle(self, request: str, interactive: bool = False) -> TurnRecord:
         request_id = "r-" + uuid.uuid4().hex[:6]
         started = time.time()
-        intent = self._interpret(request)
+        unsupported = intent_mod.unsupported_reason(request)
+        if unsupported:
+            rec = TurnRecord(
+                request_id=request_id, raw_text=request,
+                intent={"action": "unsupported", "raw_text": request}, outcome="unsupported",
+                reply=unsupported, elapsed_s=time.time() - started,
+            )
+            self.transcript.append(rec)
+            return rec
+        intent = self._vet_llm_call(request, self._interpret(request))
 
         if intent.needs_clarification or intent.action == "unknown":
             rec = TurnRecord(
@@ -284,6 +333,14 @@ class NetworkAssistant:
                 fh.write(json.dumps(rec.to_dict()) + "\n")
 
 
+def _short_error(err: Exception) -> str:
+    """One line for a failed LLM call (status text only: never the request or key)."""
+    code = getattr(err, "code", None)
+    if isinstance(code, int):
+        return f"HTTP {code}"
+    return type(err).__name__
+
+
 def _result_to_dict(result: ToolResult) -> Dict[str, Any]:
     out: Dict[str, Any] = {
         "status": result.status, "tool": result.tool,
@@ -330,6 +387,28 @@ def _build_transport(args: argparse.Namespace) -> Transport:
     return MockTransport()
 
 
+def _rejoin_ina_wifi() -> bool:
+    """After a Pi reboot the laptop may have fallen back to another Wi-Fi; switch back once.
+
+    Uses the NetworkManager connection named by INA_WIFI_CONNECTION (default
+    INA-Router). Returns True if that connection was (re)activated.
+    """
+    conn = os.environ.get("INA_WIFI_CONNECTION", "INA-Router")
+    if not conn or not shutil.which("nmcli"):
+        return False
+    try:
+        active = subprocess.run(["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+                                capture_output=True, text=True, timeout=10).stdout.splitlines()
+        if conn in active:
+            return False  # already on it: the server itself is the problem
+        print(f"Not on '{conn}'; reconnecting to the INA router...", file=sys.stderr)
+        done = subprocess.run(["nmcli", "--wait", "30", "connection", "up", conn],
+                              capture_output=True, text=True, timeout=40)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0
+
+
 def _print_banner(assistant: NetworkAssistant) -> None:
     backend = assistant.backend.name
     kind = "mock network" if isinstance(assistant.transport, MockTransport) else "live server"
@@ -353,6 +432,8 @@ def _print_banner(assistant: NetworkAssistant) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    # Before the argument defaults read INA_MCP_URL / INA_MCP_CA / INA_ROLE_TOKEN.
+    load_env_file()
     parser = argparse.ArgumentParser(
         prog="assistant",
         description="INA v2 natural-language operator assistant.",
@@ -378,12 +459,21 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--transcript", default="",
                         help="Write the session transcript to this file.")
     args = parser.parse_args(argv)
+    if args.server not in ("", "mcp", "service") and not args.server.startswith(("http://", "https://")):
+        parser.error(f"--server must be 'mcp', 'service' or an http(s):// URL, not '{args.server}' "
+                     "(for the Pi: --server mcp)")
 
     try:
         transport = _build_transport(args)
     except RuntimeError as err:  # McpConnectionError, or the MCP SDK missing
-        print(f"Could not connect to the INA MCP server: {err}", file=sys.stderr)
-        return 2
+        if not ("cannot reach" in str(err) and _rejoin_ina_wifi()):
+            print(f"Could not connect to the INA MCP server: {err}", file=sys.stderr)
+            return 2
+        try:
+            transport = _build_transport(args)
+        except RuntimeError as err2:
+            print(f"Could not connect to the INA MCP server: {err2}", file=sys.stderr)
+            return 2
     assistant = NetworkAssistant(
         transport=transport,
         role=args.role,

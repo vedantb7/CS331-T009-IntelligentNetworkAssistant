@@ -170,6 +170,8 @@ class MockTransport(Transport):
 
         if request.tool == ToolName.LIMIT_BANDWIDTH.value:
             return self._limit(request, role, device)
+        if request.tool == ToolName.REMOVE_BANDWIDTH_LIMIT.value:
+            return self._unlimit(request, device)
         if request.tool in (ToolName.BLOCK_DEVICE.value, ToolName.BLOCK_CLIENT.value):
             return self._block(request, device)
         if request.tool in (ToolName.RESTORE_DEVICE.value, ToolName.UNBLOCK_CLIENT.value):
@@ -305,6 +307,20 @@ class MockTransport(Transport):
             decision=Decision("ALLOW", "Within allowed range.", "R-rate-range"),
             verification=verification,
             detail=f"Limited {device.name} to {mbit:g} Mbit/s.",
+        )
+
+    def _unlimit(self, call: ToolCall, device: MockDevice) -> ToolResult:
+        self.state.limits.pop(device.mac, None)
+        verification = Verification(
+            passed=True, expected="no limit", measured="no limit",
+            checks=[{"name": "tc classes", "expected": "none", "measured": "none"}],
+        )
+        return ToolResult(
+            status="success", tool=call.tool, request_id=call.request_id,
+            device=device.name,
+            decision=Decision("ALLOW", "Non-protected device.", "R-rate-range"),
+            verification=verification,
+            detail=f"Removed the bandwidth limit on {device.name}.",
         )
 
     def _block(self, call: ToolCall, device: MockDevice) -> ToolResult:
@@ -650,12 +666,20 @@ class McpTransport(Transport):
                 for t in self.tools.values()]
 
     def device_names(self) -> List[str]:
-        """Names reported by the server's get_status tool."""
+        """Names reported by the server's get_status tool, plus banned devices.
+
+        A banned device is off the Wi-Fi, so it is not in the client list, but
+        the operator must still be able to name it (to unban it).
+        """
         status = self._call_tool(ToolName.GET_STATUS.value,
                                  ToolCall(tool=ToolName.GET_STATUS.value))
         if status.status != "success":
             return []
-        return [r["name"] for r in status.data.get("devices", []) if r.get("name")]
+        names = [r["name"] for r in status.data.get("devices", []) if r.get("name")]
+        for ban in status.data.get("bans", []):
+            if ban.get("client") and ban["client"] not in names:
+                names.append(ban["client"])
+        return names
 
 
 # ---------------------------------------------------------------------------

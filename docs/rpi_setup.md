@@ -88,6 +88,9 @@ sudo dnsmasq --test --conf-file=/etc/dnsmasq.d/ina-ap.conf   # dnsmasq: syntax c
 
 ```bash
 cd /opt/ina/inav2
+# keep NetworkManager off ap0 (otherwise it strips 192.168.50.1 and dnsmasq fails at boot)
+sudo install -o root -g root -m 0644 config/NetworkManager/90-ina-unmanaged.conf /etc/NetworkManager/conf.d/90-ina-unmanaged.conf
+sudo systemctl reload NetworkManager
 sudo install -o root -g root -m 0755 config/scripts/ina-ap-interface.sh /usr/local/sbin/ina-ap-interface.sh
 
 sudo tee /etc/systemd/system/ina-ap-interface.service >/dev/null <<'EOF'

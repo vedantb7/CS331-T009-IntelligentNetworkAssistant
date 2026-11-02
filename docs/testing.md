@@ -208,7 +208,7 @@ pip install -r requirements.txt     # with the MCP SDK; without it the MCP/HTTP 
 python3 tests/run_all_tests.py
 ```
 
-**Result:** `Ran 332 tests ... OK`. With the MCP SDK installed, one test is skipped (the opt-in lab test). The tests mock every subprocess (no root, no Pi) and cover:
+**Result:** `SUCCESS: Ran 339 tests cleanly`. With the MCP SDK installed, one test is skipped (the opt-in lab test). The tests mock every subprocess (no root, no Pi) and cover:
 
 - service pipeline, rollback and state;
 - nftables, tc and hostapd command building;

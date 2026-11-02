@@ -304,6 +304,50 @@ class TestAssistantWithLLM(unittest.TestCase):
             "ban guest-phone for 30 minutes, confirm=true")
         self.assertEqual(rec.outcome, "preview")
 
+    def test_llm_may_not_clamp_a_speed_to_the_allowed_range(self):
+        """'50 mbps' must reach the policy as 50 Mbit/s (and be refused), not become 20."""
+        client = FakeAnthropicClient([
+            tool_use("limit_bandwidth", {"client": "guest-phone", "download_kbit": 20000, "upload_kbit": 20000}),
+            text_reply("{}"),
+        ])
+        rec = NetworkAssistant(transport=MockTransport(), backend=AnthropicBackend(client=client)).handle(
+            "limit guest-phone to 50 mbps")
+        self.assertEqual(rec.intent["tool_arguments"]["download_kbit"], 50000)
+        self.assertEqual(rec.outcome, "denied")
+
+    def test_llm_ban_without_duration_asks_first(self):
+        """'ban X' with no duration must not silently become a permanent ban."""
+        client = FakeAnthropicClient([tool_use("ban_client", {"client": "guest-phone"})])
+        rec = NetworkAssistant(transport=MockTransport(), backend=AnthropicBackend(client=client)).handle(
+            "ban guest-phone")
+        self.assertEqual(rec.outcome, "clarify")
+        self.assertIn("permanently, or for how many minutes", rec.reply)
+
+    def test_unsupported_request_never_calls_a_tool_or_the_llm(self):
+        client = FakeAnthropicClient([])  # any LLM call would raise
+        assistant = NetworkAssistant(transport=MockTransport(), backend=AnthropicBackend(client=client))
+        for text in ("give data quota to guest-phone of 1gb", "make the wifi faster"):
+            rec = assistant.handle(text)
+            self.assertEqual((rec.outcome, rec.result), ("unsupported", None), text)
+            self.assertEqual(client.calls, [])
+
+    def test_tool_the_request_does_not_ask_for_is_never_run(self):
+        """An unsupported request mapped by the model onto some other tool is refused, not run."""
+        cases = [
+            ("rename guest-phone to my-phone", "kick_client", {"client": "guest-phone"}),
+            ("schedule guest-phone for tomorrow", "limit_bandwidth",
+             {"client": "guest-phone", "download_kbit": 1000, "upload_kbit": 1000}),
+            ("rename guest-phone to my-phone", "get_status", {}),
+        ]
+        for text, tool, args in cases:
+            transport = MockTransport()
+            client = FakeAnthropicClient([tool_use(tool, args)])
+            rec = NetworkAssistant(transport=transport, backend=AnthropicBackend(client=client)).handle(text)
+            self.assertEqual(rec.outcome, "clarify", (text, tool))
+            self.assertIn("not an action I can perform", rec.reply)
+            self.assertIsNone(rec.result)
+            self.assertEqual(transport.state.limits, {})
+
     def test_llm_failure_falls_back_to_regex(self):
         client = FakeAnthropicClient([])  # pop() on empty list raises
         rec = NetworkAssistant(transport=MockTransport(), backend=AnthropicBackend(client=client)).handle(

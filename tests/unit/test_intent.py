@@ -25,10 +25,14 @@ class TestActionDetection(unittest.TestCase):
         self.assertEqual(intent.target, "guest-phone")
         self.assertFalse(intent.needs_clarification)
 
-    def test_restore_beats_limit_keyword(self) -> None:
-        # "remove the limit" contains "limit" but is a restore.
-        intent = parse("remove the limit on guest-phone")
-        self.assertEqual(intent.action, ToolName.UNBLOCK_CLIENT.value)
+    def test_remove_limit_beats_limit_keyword(self) -> None:
+        # "remove the limit" contains "limit" but removes it (not a new limit, not an unblock).
+        for text in ("remove the limit on guest-phone", "take the speed cap off guest-phone",
+                     "stop limiting guest-phone"):
+            intent = parse(text)
+            self.assertEqual(intent.action, ToolName.REMOVE_BANDWIDTH_LIMIT.value, text)
+            self.assertEqual(intent.target, "guest-phone")
+        self.assertEqual(parse("lift the block on guest-phone").action, ToolName.UNBLOCK_CLIENT.value)
 
     def test_limit_with_rate(self) -> None:
         intent = parse("limit lab-laptop-3 to 5 mbps")
