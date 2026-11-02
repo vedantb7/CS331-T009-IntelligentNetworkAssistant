@@ -53,10 +53,10 @@ The `limit_bandwidth` tool establishes fine-grained egress and ingress bandwidth
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`limit_bandwidth`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.limit`)
-- **Kernel Primitive:** [`inav2/network/bandwidth.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/bandwidth.py) (`set_client_rate_limit`)
-- **Kernel Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_limit_applied`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`limit_bandwidth`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.limit`)
+- **Kernel Primitive:** [`inav2/network/bandwidth.py`](../../network/bandwidth.py) (`set_client_rate_limit`)
+- **Kernel Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_limit_applied`)
 
 ### Traffic Control Architecture
 

@@ -4,6 +4,8 @@ This document is a comprehensive, reproducible step-by-step setup guide for buil
 
 The Raspberry Pi 5 acts as the central router and Wi-Fi access point (`INA-Router`), while connected client devices (including a Fedora developer workstation) join as standard wireless clients.
 
+For a copy-paste command runbook, see [rpi_setup.md](rpi_setup.md) (this Pi) and [laptop_setup.md](laptop_setup.md) (operator laptop). This guide explains each step.
+
 All configuration files referenced below live in this repository under `config/` and are the source of truth. Copy them instead of retyping them. Sections 1–14 build the router. Section 15 installs the INA application on it (MCP server, policy engine, privilege boundary).
 
 ---

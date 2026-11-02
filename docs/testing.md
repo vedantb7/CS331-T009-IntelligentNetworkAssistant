@@ -1,6 +1,10 @@
-# INA v2 Infrastructure Test Records & Verification Benchmarks
+# INA v2 Test Records & Verification
 
-This document contains the exact commands, raw data outputs, technical interpretations, and limitations from the live network infrastructure testing session conducted on the **Raspberry Pi 5 (`ina-router`)** and **Fedora Workstation** client.
+This document contains:
+
+- **§1–3:** the commands, raw outputs, interpretations and limitations from the live infrastructure testing session on the **Raspberry Pi 5 (`ina-router`)** with a **Fedora workstation** client.
+- **§4:** the software and lab verification of the application layer.
+- **§5:** the hardware checks still to run.
 
 ---
 
@@ -14,9 +18,9 @@ This document contains the exact commands, raw data outputs, technical interpret
 | **D. External Ping** | Client → WAN | ICMP echo (`8.8.8.8`) | **15% packet loss**, Avg RTT: 210.680 ms | **OBSERVED** |
 | **E. TCP Throughput** | Client → Pi Router | `iperf3` (TCP Port 5201) | Receiver: **25.2 Mbps**, Sender: **26.6 Mbps**, 32 Retransmits | **VERIFIED** |
 | **F. Reverse Throughput** | Pi Router → Client | `iperf3 -R` | Not executed | **NOT RUN** |
-| **G. Access Control** | Raspberry Pi 5 | `network/access_control.py` | Live firewall blocking / MAC quarantine | **NOT TESTED** |
-| **H. Bandwidth Shaping** | Raspberry Pi 5 | `network/bandwidth.py` | Live QoS rate limiting / `tc` classes | **NOT TESTED** |
-| **I. End-to-End Pipeline** | Full System | Assistant → MCP → Router | Full conversational control loop | **NOT TESTED** |
+| **G. Access Control** | Raspberry Pi 5 | `network/access_control.py` | Blocks drop traffic in the real-kernel namespace lab (§4.2) | **LAB ONLY** |
+| **H. Bandwidth Shaping** | Raspberry Pi 5 | `network/bandwidth.py` | `tc` commands unit-tested; no live `iperf3` measurement | **NOT TESTED ON PI** |
+| **I. End-to-End Pipeline** | Full System | Assistant → MCP → Router | Full loop over real HTTPS on a laptop (§4.3) | **LAB ONLY** |
 
 ---
 
@@ -189,7 +193,92 @@ The test results recorded above reflect specific environmental conditions. When 
 
 1. **Environmental Specificity:** All observations were collected using a specific Raspberry Pi 5, a single mobile phone hotspot (`1+ Four`), and a single Fedora laptop. Performance will vary with radio frequency interference (2.4 GHz spectrum congestion), physical distance, client Wi-Fi chipset capabilities, and cellular signal strength.
 2. **Reverse Direction Not Benchmarked:** The reverse TCP throughput test (`iperf3 -R`, Pi transmitting to Client) was not executed. Downlink throughput cannot be assumed identical to uplink throughput.
-3. **No Central Access Control Validation:** The policy engine and access control modules (`network/access_control.py`) were not tested end to end. No live MAC filtering, client admission blocking, or quarantine rules were validated in the kernel during this session.
-4. **No Bandwidth Shaping Validation:** QoS controls, rate limits, and token bucket filters (`network/bandwidth.py`) were not tested against live traffic streams.
-5. **No Integrated Assistant Pipeline Execution:** The end-to-end integration flow (`User Intent -> Assistant Prompt -> MCP Tool Call -> Policy RBAC Check -> Network Mutation -> Verification`) was not validated as a unified operational pipeline. Only the underlying host network infrastructure and individual Python unit tests were verified.
+3. **Access control not validated on the Pi:** blocking is proven in the real-kernel namespace lab (§4.2), but not yet on the Pi's radio with real clients. MAC bans (hostapd) are unit-tested only.
+4. **No bandwidth shaping validation:** the `tc` HTB/IFB rate limits (`network/bandwidth.py`) have not been measured against live traffic.
+5. **Pipeline not run on hardware:** the full flow (natural language → LLM → MCP over HTTPS → policy → `ina-netctl` → kernel → structured result → reply) has run on a laptop (§4.3) but not yet against the Pi.
+
+---
+
+## 4. Software & Lab Verification (Application Layer)
+
+### 4.1 Unit tests
+
+```bash
+pip install -r requirements.txt     # with the MCP SDK; without it the MCP/HTTP tests are skipped
+python3 tests/run_all_tests.py
+```
+
+**Result:** `Ran 332 tests ... OK`. With the MCP SDK installed, one test is skipped (the opt-in lab test). The tests mock every subprocess (no root, no Pi) and cover:
+
+- service pipeline, rollback and state;
+- nftables, tc and hostapd command building;
+- policy engine, guard, role grants and device binding;
+- `ina-netctl` JSON envelopes and command logs;
+- MCP server in-process, over real HTTP and over HTTPS (bearer 401, Origin 403, Host 421);
+- LLM backends (fake Claude client, patched HTTP);
+- result view and reply checks.
+
+### 4.2 Real-kernel blocking lab (no root)
+
+```bash
+cd ..        # the directory containing inav2/
+INA_RUN_LAB=1 python3 -m unittest inav2.tests.unit.test_router_config
+# or directly:  unshare -r -n -m sh inav2/tests/lab/ina_block_lab.sh
+```
+
+**Topology:** private network namespaces, with bridge port isolation emulating `ap_isolate=1`, `proxy_arp_pvlan=1` on the Pi namespace, and NAT from `config/nftables/nftables.conf`. No INA filter table is pre-loaded: INA's own `block_client` must install it.
+
+**Observed:**
+
+```text
+baseline:              a->internet reach     a->b reach
+after block internet:  a->internet BLOCKED   a->b reach      b->internet reach
+after unblock:         a->internet reach
+after block a<->b:     a->b BLOCKED          b->a BLOCKED    a->internet reach
+after isolate b:       b->internet BLOCKED   b->pi BLOCKED
+```
+
+The matching `counter` rules in `chain forward` increment, confirming the sets are enforced by the chains.
+
+### 4.3 MCP over HTTPS (laptop)
+
+The MCP server ran with `--tls-cert/--tls-key` on `127.0.0.1:8443`, and `ina-netctl` ran without sudo (`INA_NETCTL_COMMAND`). The assistant connected with `--server mcp --mcp-url … --mcp-ca …`.
+
+**Policy denials came back through the full stack:**
+
+- `block admin-laptop` → `R-protected`;
+- `limit guest-phone to 50 mbps` → rejected by the schema;
+- an operator below its rate range → `R-rate-range`.
+
+**Transport checks:** a wrong token got 401, a foreign `Origin` header 403, a wrong `Host` header 421, and an untrusted certificate was refused by the client.
+
+**Logs:** a command run inside `ina-netctl` (`ip neigh …`) appeared in `commands.jsonl` with its stderr, and in the policy-audit outcome under the same request ID.
+
+### 4.4 Evaluation harness
+
+```bash
+python3 -m eval.run_eval
+```
+
+**Result:** 16/16 functional cases, 10/10 clarification cases, 0 of 65 attack runs executed an unsafe change. Results are in `eval/results/*.csv`. The harness runs against the in-memory mock with the rule-based parser.
+
+---
+
+## 5. Hardware Checks Still to Run (Application Layer)
+
+Run these after [setup.md](setup.md) §15, and record the outputs here:
+
+| # | Check | Pass when |
+|---|---|---|
+| H1 | `sudo -u ina sudo -n /usr/local/sbin/ina-netctl --json --role viewer status --` | `{"ok": true, ...}` |
+| H2 | `sudo -u ina nft list ruleset` | Fails (no privilege) |
+| H3 | `sudo nft list chain inet ina_filter forward` | Lists the `@blocked_*` / `@isolated` rules |
+| H4 | `sudo ina-netctl sync-devices`, reconnect a registered device | Lease file shows its registered name |
+| H5 | `block <client> internet` / `unblock` | Browsing stops / resumes; Wi-Fi and DHCP stay up |
+| H6 | `block <a> <b>` | a↔b ping fails; both still reach the internet |
+| H7 | `limit <client> 5000 5000` + `iperf3` | ~5 Mbit/s both directions |
+| H8 | `kick` / `ban --minutes 2 --yes` / wait for expiry | Reconnects / cannot join / rejoins after expiry |
+| H9 | Reboot and `systemctl restart nftables` | Blocks, limits, bans and bindings restored |
+| H10 | Assistant over HTTPS from the bound admin laptop | NL request → action → reply; same token from another device → `R-token-device` |
+| H11 | Logs | One request ID across `policy_audit.jsonl`, `commands.jsonl` and `audit.log`; hash chains verify |
 

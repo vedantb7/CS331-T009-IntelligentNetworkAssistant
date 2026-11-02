@@ -2,7 +2,7 @@
 
 ## 1. Overview & System Purpose
 
-The **Intelligent Network Configuration Assistant v2 (INA v2)** is an automated network management and policy enforcement framework developed as a Computer Networks engineering project. The system provides natural-language driven network configuration, active telemetry, device discovery, and policy-governed traffic shaping over a dedicated test network.
+The **Intelligent Network Configuration Assistant v2 (INA v2)** is a natural-language network assistant developed as a Computer Networks engineering project. An operator's request is turned by an LLM into a Model Context Protocol (MCP) tool call, authorized by a policy engine on the router, applied with `nftables`, `tc` or `hostapd`, verified, logged, and explained back in plain English.
 
 In the verified system deployment, a **Raspberry Pi 5 (`ina-router`)** acts as the dedicated network infrastructure host, operating as a wireless access point and gateway router. Client devices—including a Fedora developer laptop—connect to the local network over Wi-Fi as standard wireless clients.
 
@@ -107,102 +107,124 @@ sequenceDiagram
 
 ## 4. Host System Services & Startup Ordering
 
-The Raspberry Pi infrastructure relies on four core Linux daemons and systemd units:
-
 ```text
 [Boot]
-  │
-  ├──> wlan0 initialized by kernel / NetworkManager connects to Hotspot
-  │
-  ├──> ina-ap-interface.service (creates ap0, sets link UP, assigns 192.168.50.1/24)
-  │      │
-  │      ├──> hostapd.service (binds to ap0, starts 802.11 beaconing)
-  │      │
-  │      └──> dnsmasq.service (binds to ap0, starts DHCP/DNS listener)
-  │
-  └──> nftables.service (loads table ip ina_nat masquerade rule)
+  ├──> systemd-modules-load (ifb, sch_htb, sch_sfq, cls_flower, act_mirred)
+  ├──> wlan0 joins the hotspot (NetworkManager)
+  ├──> ina-ap-interface.service   creates ap0, 192.168.50.1/24, proxy_arp_pvlan, offloads off
+  │      ├──> hostapd.service      AP on ap0 (ap_isolate=1, root-only control socket, deny list)
+  │      ├──> dnsmasq.service      DHCP/DNS on ap0, reservations from /etc/ina/dhcp-hosts
+  │      └──> ina-mcp.service      MCP server (user ina), HTTPS 192.168.50.1:8443
+  ├──> nftables.service           table ip ina_nat + include /etc/nftables.d/ina-filter.nft
+  │      └──> ina-reconcile.service (PartOf=nftables) re-applies blocks, limits, bans and
+  │                                 MAC<->IP bindings from /var/lib/ina/state.json
+  └──> ina-expire.timer           lifts expired bans every minute
 ```
 
-1. **`ina-ap-interface.service`:** A systemd oneshot unit executing `/usr/local/sbin/ina-ap-interface.sh`. Creates virtual interface `ap0` on top of `wlan0`, sets link `UP`, and assigns static address `192.168.50.1/24`.
-2. **`hostapd`:** Access point authentication daemon. Reads `/etc/hostapd/hostapd.conf`, binds to `ap0`, advertises SSID `INA-Router` on channel 11, and handles WPA2 4-way handshakes.
-3. **`dnsmasq`:** Lightweight DHCP and DNS caching server. Reads `/etc/dnsmasq.d/ina-ap.conf`, listens on `ap0`, dynamically leases addresses from `192.168.50.10` to `192.168.50.100` (12-hour lease duration), and publishes gateway and DNS options.
-4. **`nftables`:** Modern Linux packet filtering framework. Reads `/etc/nftables.conf` and applies postrouting masquerading rules for client egress traffic.
+1. **`ina-ap-interface.service`** runs `/usr/local/sbin/ina-ap-interface.sh`. It creates `ap0` on `wlan0` if it is missing, assigns `192.168.50.1/24`, enables forwarding and `proxy_arp_pvlan`, and disables segmentation offloads.
+2. **`hostapd`** serves SSID `INA-Router` on channel 11 with WPA2-CCMP:
+   - `ap_isolate=1`, so client↔client traffic passes through the Pi and can be filtered;
+   - a root-only control socket for kick and ban;
+   - `deny_mac_file` for bans.
+3. **`dnsmasq`** leases `192.168.50.10–100` (12 h). It also reads the per-device reservations that `ina-netctl sync-devices` generates from `policy/devices.yaml`.
+4. **`nftables`** loads NAT (`table ip ina_nat`) and the INA filter table (`inet ina_filter`), whose sets and chains enforce blocks and anti-spoofing.
+5. **`ina-reconcile`**, **`ina-expire`** and **`ina-mcp`** are INA's own units (`config/systemd/`).
 
-### Startup Race Resolution (Systemd Overrides)
+### Startup race resolution (systemd overrides)
 
-Because `ap0` is created dynamically at boot, services attempting to bind to `ap0` prematurely (`hostapd` and `dnsmasq`) would fail if started before interface creation. Systemd drop-in override directories resolve this ordering:
+`ap0` is created at boot, so `hostapd` and `dnsmasq` would fail if they started before it existed. Drop-ins order them:
 
-- `/etc/systemd/system/hostapd.service.d/override.conf`: Establishes `BindsTo=sys-subsystem-net-devices-ap0.device` and `After=ina-ap-interface.service`.
-- `/etc/systemd/system/dnsmasq.service.d/override.conf`: Establishes `After=ina-ap-interface.service hostapd.service`.
+- `/etc/systemd/system/hostapd.service.d/override.conf`: `BindsTo=sys-subsystem-net-devices-ap0.device`, `After=ina-ap-interface.service`.
+- `/etc/systemd/system/dnsmasq.service.d/override.conf`: `After=ina-ap-interface.service hostapd.service`.
 
 ---
 
-## 5. Architectural Separation: Infrastructure vs. Application Layer
-
-A fundamental principle of the INA v2 design is the strict decoupling of the **Network Infrastructure Layer** from the **INA Application & Policy Layer**:
+## 5. Application Layer
 
 ```text
-┌────────────────────────────────────────────────────────────────────────┐
-│                        INA APPLICATION LAYER                           │
-│                                                                        │
-│   ┌────────────────────────┐         ┌─────────────────────────────┐   │
-│   │   Assistant Client     │         │   Policy & Auth Engine      │   │
-│   │   (assistant/)         │         │   (policy/)                 │   │
-│   └───────────┬────────────┘         └──────────────┬──────────────┘   │
-│               │ MCP Protocol                        │ RBAC / Rules     │
-│   ┌───────────▼─────────────────────────────────────▼──────────────┐   │
-│   │                    FastMCP Server                              │   │
-│   │                    (mcp_server/)                               │   │
-│   └───────────────────────────┬────────────────────────────────────┘   │
-│                               │ Safe Python Primitives                 │
-│   ┌───────────────────────────▼────────────────────────────────────┐   │
-│   │                    Network Control Layer                       │   │
-│   │  • device_discovery.py (Host & Client ARP/DHCP Inspection)     │   │
-│   │  • access_point.py    (Configuration & Router State Inspector) │   │
-│   │  • access_control.py  (Firewall & Quarantine - Planned)        │   │
-│   │  • bandwidth.py       (Traffic Shaping / QoS - Planned)        │   │
-│   │  • verification.py    (Post-action State Checks - Planned)     │   │
-│   └───────────────────────────┬────────────────────────────────────┘   │
-└───────────────────────────────┼────────────────────────────────────────┘
-                                │ System Calls / SSH / Local IPC
-┌───────────────────────────────▼────────────────────────────────────────┐
-│                    NETWORK INFRASTRUCTURE LAYER                        │
-│                   (Raspberry Pi 5 / Debian Trixie)                     │
-│                                                                        │
-│   • Linux Kernel Subsystem (IPv4 Forwarding, nftables NAT, mac80211)   │
-│   • Physical & Virtual Interfaces (wlan0 uplink, ap0 access point)     │
-│   • System Daemons (hostapd, dnsmasq, systemd units)                  │
-│   • Hardware Platform (Broadcom Wi-Fi, Quad-Core ARM Cortex-A76)       │
-└────────────────────────────────────────────────────────────────────────┘
+OPERATOR LAPTOP                                         RASPBERRY PI 5 (ina-router)
+┌─────────────────────────────────────┐                ┌──────────────────────────────────────────────────────┐
+│ assistant/  (python -m assistant)    │                │ ina-mcp.service  [user ina]  mcp_server/              │
+│  • LLM backend (any provider, .env)  │  HTTPS POST    │  • Streamable HTTP (stateless, JSON), TLS            │
+│    or rule-based fallback parser     │  /mcp          │  • bearer token → 401 if invalid; Host/Origin checks │
+│  • McpTransport (official MCP SDK)   │═══════════════►│  • inputSchema validation (SDK)                      │
+│  • result view (no commands) → LLM   │  Bearer token  │  • PolicyGuard (policy/): token → person, role,      │
+│  • reply checked against status      │◄═══════════════│    bound device → rules → policy audit log           │
+└─────────────────────────────────────┘ structured      │  • NetctlService (network/privileged.py)             │
+                                         result         └──────────────┬───────────────────────────────────────┘
+                                                                       │ sudo -n /usr/local/sbin/ina-netctl --json
+                                                                       │   --request-id <id> --role <role> <cmd> -- <args>
+                                                        ┌──────────────▼───────────────────────────────────────┐
+                                                        │ ina-netctl [root]  network/                          │
+                                                        │  service.py: validate → lock → apply → verify →      │
+                                                        │  rollback → state.json → audit.log                   │
+                                                        │  each command → commands.jsonl (as it finishes)      │
+                                                        │  nft (inet ina_filter) · tc (HTB/IFB) · hostapd_cli  │
+                                                        └──────────────────────────────────────────────────────┘
 ```
 
-1. **Host Infrastructure Layer:** Configured and managed natively by the host operating system (Raspberry Pi OS / Debian). Runs independently of Python or MCP. If the assistant or MCP server is stopped or crashes, router functionality (AP, DHCP, NAT, forwarding) remains fully operational.
-2. **INA Application Layer:** Software suite implementing natural language processing, tool registry, authorization policies, telemetry, and automated network operations. Can run locally on the Raspberry Pi or remotely on an operator workstation over secure transport.
+### 5.1 Request workflow
+
+| # | Step | Where |
+|---|---|---|
+| 1 | Operator types a natural-language request | `assistant/client.py` |
+| 2 | Request goes to the LLM (or the rule-based parser if none is configured or it fails) | `assistant/llm.py`, `intent.py` |
+| 3 | LLM chooses one tool and its arguments by native function calling over the server's `tools/list` schemas, or asks a question | `assistant/llm.py`, `prompts.py` |
+| 4 | MCP client sends `tools/call` to the Pi over HTTPS with the role token | `assistant/transport.py` (`McpTransport`) |
+| 5 | MCP server receives it, verifies the bearer token, checks Host/Origin and validates the arguments | `mcp_server/server.py`, `auth.py` |
+| 6 | Policy check: token → person, role and bound device → rules (`R-*` decision), written to the policy audit | `policy/guard.py`, `engine.py` |
+| 7 | Allowed call becomes the CLI command `sudo -n ina-netctl …` | `network/privileged.py` |
+| 8 | Command runs as root: the service layer drives `nft`, `tc` or `hostapd_cli` | `network/netctl.py`, `service.py` |
+| 9 | Each command's exit code and output are captured and logged as it finishes | `network/command_log.py` |
+| 10 | Output goes back to the MCP server as a JSON envelope (result + command trace + request ID) | `network/netctl.py` |
+| 11 | MCP server returns the structured result (failures as a fixed summary + reference ID) | `mcp_server/tools.py` |
+| 12 | Client sends a whitelisted, command-free view to the LLM as the tool result in the same conversation | `assistant/result_view.py` |
+| 13 | LLM writes the reply; it is accepted only if it echoes the real status, otherwise a template is used | `assistant/llm.py`, `client.py` |
+| 14 | Reply is shown to the operator | `assistant/client.py` |
+
+### 5.2 Trust boundaries
+
+1. **LLM → MCP server.** The LLM only proposes. The server validates the schema and the policy, and the role comes from the token, never from the model. `confirm` for a ban is set only by a human y/N in the client.
+2. **MCP server (user `ina`) → root.** Sudo allows exactly one command, `ina-netctl`, with typed subcommands and no shell (see [privilege_boundary.md](privilege_boundary.md)).
+3. **Network → MCP server.** The server uses TLS and bearer tokens, and binds to the AP address. Clients blocked from the gateway cannot reach it.
+
+### 5.3 Devices and roles
+
+- **Every device on the Wi-Fi is a `client`.** Operators and admins may block, limit, kick or ban it.
+- **`protected` devices** (listed by hand in `policy/devices.yaml`) can never be changed by any role.
+- **Roles are granted by hand**, per person, bound to one registered device with a fixed IP: `sudo ina-netctl roles grant <person> <role> --device <device>`.
+  - The token only works from that device's IP, which nftables anti-spoofing ties to its MAC.
+  - A role holder cannot act on their own bound device.
+  - Grants are hashed in `/etc/ina/grants.json` and re-read on change.
+- **Admin vs operator** differ in limits only: rate range, ban duration, and which bans they may lift (`policy/roles.yaml`). The viewer can only read status.
+
+### 5.4 Logs
+
+| Log | Written by | Contents |
+|---|---|---|
+| `/var/log/ina-mcp/policy_audit.jsonl` | MCP server | Decision (person, role, tool, arguments, rule) and outcome (+ command summary) |
+| `/var/log/ina/commands.jsonl` | `ina-netctl` (root) | Every command: argv, exit code, stdout/stderr, duration |
+| `/var/log/ina/audit.log` | service layer (root) | Each change with its parameters and status |
+
+All three are hash-chained and share the request ID assigned by the policy guard.
 
 ---
 
-## 6. Component Ownership & Implementation Status
+## 6. Component Status
 
-| Component | Repository Path | Execution Host | Current Status | Notes |
-| :--- | :--- | :--- | :--- | :--- |
-| **Pi Access Point & Uplink** | `/etc/hostapd/`, `/etc/systemd/` | Raspberry Pi 5 | **Verified** | Reboot-persistent AP (`ap0`) and uplink (`wlan0`) tested. |
-| **DHCP & DNS Services** | `/etc/dnsmasq.d/` | Raspberry Pi 5 | **Verified** | Leases `192.168.50.10–100` dynamically with 12h expiry. |
-| **Routing & NAT Engine** | `/etc/nftables.conf`, sysctl | Raspberry Pi 5 | **Verified** | Forwarding active (`ip_forward=1`), NAT masquerade active. |
-| **Host Network Discovery** | `network/device_discovery.py` | Pi or Dev Workstation | **Verified** | Inspects interfaces, routes, wireless driver capabilities. |
-| **Client Device Discovery** | `network/device_discovery.py` | Raspberry Pi 5 | **Verified** | Parses `dnsmasq.leases` and `ip neigh` table. |
-| **Router Status Inspector** | `network/access_point.py` | Raspberry Pi 5 | **Verified** | Validates config and inspects live systemd/nftables state. |
-| **Access Control & Quarantine** | `network/access_control.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; live blocking not tested. |
-| **Bandwidth Management / QoS** | `network/bandwidth.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; live traffic shaping not tested. |
-| **Post-Action Verification** | `network/verification.py` | Raspberry Pi 5 | **Planned** | Skeleton docstring; verification hooks pending. |
-| **FastMCP Server** | `mcp_server/` | Pi or Dev Workstation | **Planned** | Server skeleton created; tool schemas pending. |
-| **Policy Engine & RBAC** | `policy/` | Pi or Dev Workstation | **Planned** | Declarative rules and role definitions pending. |
-| **AI Assistant Client** | `assistant/` | Operator Workstation | **Planned** | Conversational prompt and client pipeline pending. |
+See [implementation_status.md](implementation_status.md) for the full matrix. In short:
+
+- **Router infrastructure:** verified on the Pi.
+- **Application layer:** implemented and covered by unit tests, a real-kernel namespace lab (blocking) and live HTTPS round trips on a laptop.
+- **Pending:** hardware validation of the application layer on the Pi.
 
 ---
 
 ## 7. Known Architectural Limitations
 
-1. **Shared Wi-Fi Radio Channel:** Because `wlan0` and `ap0` operate on the same physical radio, simultaneous AP and STA operation must share radio time. Sustained traffic on both interfaces simultaneously impacts wireless throughput and latency.
-2. **Cellular Uplink Variability:** The upstream internet uplink is provided by a mobile phone hotspot. Packet loss, variable latency, and cellular throttling are external factors beyond the router's local control.
-3. **Client MAC Randomization:** Modern wireless clients generate randomized MAC addresses per SSID by default, which can result in multiple lease records for a single physical device across reconnects.
-4. **Unassigned DHCP Hostnames:** Clients that do not transmit Option 12 in their DHCP requests are recorded with a hostname of `*` in `dnsmasq.leases`, requiring IP or MAC based identification.
+1. **Shared Wi-Fi radio.** `wlan0` and `ap0` share one radio, so heavy traffic on both lowers throughput and raises latency.
+2. **Cellular uplink.** Loss, latency and throttling on the phone hotspot are outside the router's control.
+3. **MAC randomisation.** A device that rotates its MAC appears as a new, unregistered client. MAC bans and registrations hold only while the device keeps its per-network MAC.
+4. **Self-reported hostnames.** Leases show the name a device chose for itself unless it is registered (`sync-devices`). INA resolves registered names by MAC and never trusts the self-reported name for policy.
+5. **Shaping vs airtime.** `tc` caps IP throughput, but a slow Wi-Fi client still consumes airtime.
+6. **Service-account trust.** Whoever controls the `ina` account can call `sudo ina-netctl --role admin …` directly and skip the MCP policy guard. Protected-device and range checks still apply, and the account cannot change role grants.

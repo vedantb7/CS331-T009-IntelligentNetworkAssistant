@@ -51,7 +51,8 @@ The local access point network operates in the private IPv4 block defined by RFC
 ```text
 192.168.50.0        Network address (Reserved)
 192.168.50.1        Raspberry Pi Router (ap0 static IP / Gateway / DNS)
-192.168.50.2 - .9   Static Infrastructure Reservations (e.g. managed switches, AP bridges)
+192.168.50.2 - .9   Fixed IPs for registered infrastructure / admin devices (devices.yaml `ip`),
+                    e.g. .2 admin-laptop, .3 probe-laptop; bound to their MACs (anti-spoofing)
 192.168.50.10 - .100 Dynamic DHCP Client Pool (Assigned by dnsmasq to wireless clients)
 192.168.50.101 - .254 High Static / Server Reservations (e.g. edge compute nodes, static test rigs)
 192.168.50.255      Broadcast address (Reserved)
@@ -224,4 +225,59 @@ Internet / WAN (8.8.8.8)
 | :--- | :--- | :--- | :--- | :--- |
 | **Local Link** | `ping -c 20 192.168.50.1` | Client Wi-Fi NIC → `ap0` (Hop 1) | **0% packet loss**, 34.6 ms avg RTT | Verifies 802.11 association, WPA2 handshake, DHCP IP assignment, and local ARP resolution. |
 | **Internet Path** | `ping -c 20 8.8.8.8` | Client → `ap0` → Kernel NAT → `wlan0` → Hotspot → Cellular Tower → Internet | **15% packet loss**, 210.6 ms avg RTT | Tests full routing pipeline including upstream cellular backhaul. High latency or loss here often reflects mobile network conditions rather than local AP failure. |
+
+---
+
+## 7. Device Identity: Registry, Reservations and Anti-Spoofing
+
+`policy/devices.yaml` is the single list of known devices: name → MAC → class (`client` or `protected`), with an optional fixed IP. Every device **not** listed is a normal `client`, addressable by IP or MAC.
+
+```bash
+sudo ina-netctl sync-devices
+```
+
+This command does three things:
+
+1. **Reservations:** writes `/etc/ina/dhcp-hosts`, which dnsmasq reads through `dhcp-hostsfile=` and re-reads on SIGHUP. Each line is `mac,[ip,]name`, so a registered device's lease carries its admin-assigned name rather than the hostname it reports itself.
+2. **Anti-spoofing:** fills the `managed_ips` and `mac_ip_bind` sets. A packet from a fixed IP arriving with any other MAC is dropped in `prerouting`.
+3. **Reload:** sends SIGHUP to dnsmasq (no restart, leases kept).
+
+The command refuses to run while `devices.yaml` still has the example MACs (`aa:bb:cc:dd:ee:..`). `ina-reconcile.service` re-binds the fixed IPs after every boot.
+
+When INA resolves a **registered** name, it can fall back to the device's MAC if the lease still shows another hostname. A self-reported hostname never decides a policy class.
+
+---
+
+## 8. The INA Filter Table (`inet ina_filter`)
+
+**Source:** `config/nftables/ina-filter.nft`, installed as `/etc/nftables.d/ina-filter.nft` and included from `/etc/nftables.conf`. If its chains are missing, INA loads the definition itself and keeps any set elements already present.
+
+| Set | Filled by | Effect |
+|---|---|---|
+| `blocked_pairs` (ip . ip) | `block_client a b` | a↔b forwarding rejected (both directions stored) |
+| `blocked_internet` | `block_client x internet` | x ↔ `wlan0` forwarding rejected / dropped |
+| `blocked_gateway` | `block_client x gateway` | x → Pi services rejected, except DHCP (67) and DNS (53) |
+| `isolated` | `block_client x all` | All of the above |
+| `managed_ips`, `mac_ip_bind` | `ina-netctl sync-devices` | Fixed IP must arrive with its registered MAC |
+
+The chains:
+
+- **`prerouting`** (priority raw): anti-spoofing.
+- **`forward`:** pair, isolation and internet rules, plus IPv6 drop on `ap0`.
+- **`input`:** DHCP/DNS accept, then the gateway and isolation rejects.
+
+Every rule has a `counter`, so `nft list chain inet ina_filter forward` shows what was hit. Reloading nftables recreates the table with empty sets; `ina-reconcile` (`PartOf=nftables.service`) re-applies the saved state.
+
+Bandwidth limits are separate: `tc` HTB on `ap0` (download) and on `ifb-ap0` via `mirred` (upload). Their class IDs are derived from the client's last octet.
+
+---
+
+## 9. INA Service Ports on the Pi
+
+| Port | Bound to | Service | Who can reach it |
+|---|---|---|---|
+| UDP 67 | `ap0` | dnsmasq DHCP | Every client, including blocked ones |
+| UDP/TCP 53 | `192.168.50.1` | dnsmasq DNS | Every client, including blocked ones |
+| TCP 8443 | `192.168.50.1` | `ina-mcp.service`, MCP over HTTPS | Any client not blocked from the gateway; requires a valid role token from the device the role is bound to |
+| TCP 22 | all | sshd (administration) | As configured |
 

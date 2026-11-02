@@ -1,6 +1,8 @@
 # Tool Reference: `get_status`
 
-The `get_status` tool queries the current state of the local network, inspecting connected Wi-Fi stations, active DHCP leases, ARP neighbor reachability, active `nftables` packet blocks, `tc` bandwidth rate limits, active MAC bans, and kernel configuration drift.
+The `get_status` tool reports the known clients with their active packet blocks, bandwidth limits and MAC bans, as recorded in the desired state (`/var/lib/ina/state.json`).
+
+> **Current limitation:** the client list is built from an injected lease map, so on the Pi it is empty. Every listed client is reported `associated` / `REACHABLE`, and `drift_detected` is always `false`. Reading `dnsmasq.leases`, `ip neigh` and the live `nft` / `tc` state is an open item ([implementation_status.md](../implementation_status.md)).
 
 ---
 
@@ -13,7 +15,7 @@ The `get_status` tool queries the current state of the local network, inspecting
   3. **Packet Filtering (`nftables`):** Reads sets from table `inet ina_filter` (`blocked_pairs`, `blocked_internet`, `blocked_gateway`, `isolated`) to identify blocked targets per client.
   4. **Traffic Shaping (`tc`):** Reads classes from `ap0` and `ifb-ap0` to report applied download and upload caps in kbit/s.
   5. **Wireless Access Control (`hostapd`):** Reads active bans stored in `/var/lib/ina/state.json` and verifies active deny ACLs.
-- **Drift Detection:** Compares the desired state recorded in `/var/lib/ina/state.json` against the live running kernel state. If any rule or class has drifted out of sync, `drift_detected=True` is flagged.
+- **Drift Detection (planned):** the `drift_detected` field exists, but no comparison with the live kernel state is made yet; it is always `false`.
 - **Zero Side Effects:** Strictly read-only; alters no kernel state, files, or queues. Safe to execute repeatedly.
 
 ### What the Tool Leaves Untouched
@@ -67,8 +69,8 @@ The `get_status` tool queries the current state of the local network, inspecting
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`get_status`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.status`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`get_status`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.status`)
 
 ### Subsystem Query Commands
 ```bash

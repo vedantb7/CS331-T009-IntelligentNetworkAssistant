@@ -42,10 +42,10 @@ The `remove_bandwidth_limit` tool dismantles active traffic shaping classes for 
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`remove_bandwidth_limit`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.remove_limit`)
-- **Kernel Primitive:** [`inav2/network/bandwidth.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/bandwidth.py) (`remove_client_rate_limit`)
-- **Kernel Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_limit_removed`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`remove_bandwidth_limit`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.remove_limit`)
+- **Kernel Primitive:** [`inav2/network/bandwidth.py`](../../network/bandwidth.py) (`remove_client_rate_limit`)
+- **Kernel Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_limit_removed`)
 
 ### Underlying Kernel Commands
 The tool derives the class ID from the IP's 4th octet (`<class_id> = 100 + octet`) and removes the filters and classes:

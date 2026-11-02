@@ -1,6 +1,9 @@
 # INA v2 Diagnostic & Troubleshooting Guide
 
-This guide provides diagnostic procedures, verification commands, and safe corrective actions for common operational issues encountered on the **Raspberry Pi 5 (`ina-router`)** infrastructure and connected client devices.
+This guide provides diagnostic procedures, verification commands, and safe corrective actions for common issues:
+
+- **Cases 1–11:** the **Raspberry Pi 5 (`ina-router`)** infrastructure and connected client devices.
+- **Cases 12–21:** the INA application (assistant, MCP server, policy, `ina-netctl`).
 
 ---
 
@@ -12,6 +15,7 @@ When troubleshooting, always follow this order of operations:
 3. **Local Addressing & DHCP:** Verify that the client obtained an IP in `192.168.50.0/24` and can ping `192.168.50.1`.
 4. **Kernel Forwarding & NAT:** Verify `net.ipv4.ip_forward = 1` and that `nftables` masquerade rule is loaded.
 5. **Upstream Path:** Verify that the Pi itself can reach external destinations through `wlan0`.
+6. **INA Application:** Verify `ina-mcp.service` is active, `sudo -u ina sudo -n ina-netctl --json --role viewer status --` succeeds, and the filter chains are loaded. Use the request ID to find a call in the logs.
 
 ---
 
@@ -371,10 +375,143 @@ sudo nft list ruleset
 
 #### Corrective Actions
 1. Remove any `flush ruleset` directive from `/etc/nftables.conf`.
-2. Inspect the current ruleset and ensure only `table ip ina_nat` is defined for INA.
+2. Inspect the current ruleset and ensure only `table ip ina_nat` and `table inet ina_filter` are defined for INA.
 3. Test loading the table file explicitly:
    ```bash
    sudo nft -c -f /etc/nftables.conf  # Syntax check only
    sudo nft -f /etc/nftables.conf     # Apply safely
    ```
+
+---
+
+### Case 12: Assistant says "the server's TLS certificate is not trusted"
+
+#### Symptoms
+`Could not connect to the INA MCP server: the server's TLS certificate is not trusted; pass --mcp-ca ...`
+
+#### Corrective Actions
+1. Copy the Pi's certificate once: `scp team009@ina-router.local:/etc/ina/tls/server.crt ~/.config/ina/ina-router.crt`.
+2. Set `INA_MCP_CA` (or `--mcp-ca`) to that file.
+3. The certificate must name the address you connect to. Its SAN includes `IP:192.168.50.1`, `DNS:ina-router` and `DNS:ina-router.local` (setup.md §15.6). Regenerate it if you use another name.
+
+---
+
+### Case 13: Assistant says "the server refused the request; most likely the role token is missing or invalid"
+
+#### Symptoms
+Every connection is refused. A raw `curl` to `/mcp` returns `401`.
+
+#### Diagnostic Commands (Run on Pi)
+```bash
+sudo ina-netctl roles list              # does the person have a grant?
+ls -l /etc/ina/grants.json              # root:ina 0640 (ina-mcp must be able to read it)
+journalctl -u ina-mcp -n 50
+```
+
+#### Corrective Actions
+1. Make sure `INA_ROLE_TOKEN` on the laptop is the token printed by `roles grant` / `roles rotate`. Tokens are shown only once; rotate to get a new one.
+2. Fix the file ownership if needed: `sudo chown root:ina /etc/ina/grants.json && sudo chmod 0640 /etc/ina/grants.json`.
+
+---
+
+### Case 14: Every call is denied with "This role token is bound to '<device>' and cannot be used from another device" (`R-token-device`)
+
+#### Confirmed & Potential Causes
+- The request does not come from the bound device's fixed IP. The laptop may still hold a pool lease, or you are on another device.
+- The bound device has no fixed `ip` in `devices.yaml`.
+
+#### Corrective Actions
+1. On the laptop, run `ip -4 addr show`. The address must equal the device's `ip` in `devices.yaml` (e.g. `192.168.50.2`).
+2. If it doesn't: run `sudo ina-netctl sync-devices`, then reconnect the laptop to `INA-Router` so it takes its reservation.
+3. To use another device, revoke the grant and grant it again with `--device <that device>`.
+
+---
+
+### Case 15: "Could not connect ... cannot reach https://192.168.50.1:8443/mcp"
+
+#### Diagnostic Commands (Run on Pi)
+```bash
+systemctl status ina-mcp
+sudo ss -ltnp | grep 8443
+sudo nft list set inet ina_filter blocked_gateway; sudo nft list set inet ina_filter isolated
+```
+
+#### Corrective Actions
+1. Start the service: `sudo systemctl restart ina-mcp`. If it fails, check the TLS key permissions (root:ina 0640) and that `ap0` has `192.168.50.1`.
+2. If your own laptop's IP is in `blocked_gateway` or `isolated`, it cannot reach the Pi. Unblock it from the Pi console. (Protected devices cannot be blocked through INA.)
+
+---
+
+### Case 16: Tool calls fail with "Failed: The router could not apply the change (reference <id>)"
+
+#### Diagnostic Commands (Run on Pi)
+```bash
+grep '"<id>"' /var/log/ina/commands.jsonl          # every command of that request, with exit code and stderr
+grep '"<id>"' /var/log/ina-mcp/policy_audit.jsonl  # decision and outcome
+sudo -u ina sudo -n /usr/local/sbin/ina-netctl --json --role viewer status --
+```
+
+#### Confirmed & Potential Causes
+- `ina-netctl did not return a result (sudo: a password is required)`: the sudoers rule is missing. Check with `sudo visudo -cf /etc/sudoers.d/ina` and reinstall it (setup.md §15.2).
+- An `nft` / `tc` / `hostapd_cli` error, which shows in the `stderr` of that request's command records.
+
+---
+
+### Case 17: A block reports success, but traffic still flows
+
+#### Diagnostic Commands (Run on Pi)
+```bash
+sudo nft list chain inet ina_filter forward     # must exist and reference @blocked_* / @isolated
+sudo nft list set inet ina_filter blocked_internet
+sysctl net.ipv4.conf.ap0.proxy_arp_pvlan; grep ap_isolate /etc/hostapd/hostapd.conf
+```
+
+#### Confirmed & Potential Causes
+- The filter chains are missing (only the sets exist).
+- Client↔client blocks need `ap_isolate=1` and `proxy_arp_pvlan=1`; without them the radio bridges clients directly, and the Pi never sees the traffic.
+- Flow offloading is enabled. Offloaded packets skip the forward chain, so it must stay disabled.
+
+#### Corrective Actions
+1. Install `config/nftables/ina-filter.nft` and include it from `/etc/nftables.conf` (setup.md §11). Then run `sudo systemctl restart nftables`; reconcile re-applies the blocks.
+2. Install the hostapd template and interface script from `config/`, then restart `ina-ap-interface` and `hostapd`.
+
+---
+
+### Case 18: "Unknown client 'guest-phone'" although the phone is connected
+
+#### Confirmed & Potential Causes
+- The device is not registered, so its lease carries its own hostname (e.g. `Pixel-7`).
+- It is registered with a different MAC; phones use a per-network private MAC.
+
+#### Corrective Actions
+1. Find the MAC: `cat /var/lib/misc/dnsmasq.leases`.
+2. Put that MAC in `policy/devices.yaml`, then run `sudo ina-netctl sync-devices` and reconnect the device.
+3. Alternatively, address the device by IP (`block 192.168.50.47 internet`).
+
+---
+
+### Case 19: `sync-devices` refuses: "devices.yaml still has the example MACs"
+
+#### Corrective Actions
+Replace every `aa:bb:cc:dd:ee:..` MAC in `policy/devices.yaml` and in `policy/rules.yaml` → `protected_macs` with the real ones. Only for a lab with no real devices, pass `--allow-placeholders`.
+
+---
+
+### Case 20: `kick_client` / `ban_client` fail with "hostapd control interface not available on ap0"
+
+#### Diagnostic Commands (Run on Pi)
+```bash
+grep -E 'ctrl_interface|deny_mac_file' /etc/hostapd/hostapd.conf
+sudo hostapd_cli -i ap0 ping                # PONG
+ls -l /etc/hostapd/hostapd.deny
+```
+
+#### Corrective Actions
+Install `config/hostapd/hostapd.conf.template` (it sets `ctrl_interface=/run/hostapd` and `deny_mac_file`), create `/etc/hostapd/hostapd.deny`, then restart hostapd (setup.md §6).
+
+---
+
+### Case 21: `ina-netctl roles ...` fails with "role grants cannot be changed through the 'ina' service account"
+
+This is intended. Role grants must be managed by an administrator logged in to the Pi (`sudo ina-netctl roles ...` from your own account), never through the `ina` account's sudo rule. Otherwise a compromised MCP server could grant itself a role.
 

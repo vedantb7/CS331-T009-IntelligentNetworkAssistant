@@ -48,10 +48,10 @@ The `kick_client` tool sends a one-time 802.11 deauthentication frame to a targe
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`kick_client`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.kick`)
-- **Wireless Primitive:** [`inav2/network/wireless.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/wireless.py) (`kick_station`)
-- **Wireless Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_station_gone`, `get_station_info`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`kick_client`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.kick`)
+- **Wireless Primitive:** [`inav2/network/wireless.py`](../../network/wireless.py) (`kick_station`)
+- **Wireless Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_station_gone`, `get_station_info`)
 
 ### Underlying Control Commands
 Commands communicate with `hostapd` using direct binary arguments (`shell=False`):

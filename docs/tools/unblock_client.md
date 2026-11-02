@@ -45,10 +45,10 @@ The `unblock_client` tool removes an active packet filtering rule previously set
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`unblock_client`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.unblock`)
-- **Kernel Primitive:** [`inav2/network/access_control.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/access_control.py) (`unblock_client`)
-- **Kernel Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_unblock_applied`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`unblock_client`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.unblock`)
+- **Kernel Primitive:** [`inav2/network/access_control.py`](../../network/access_control.py) (`unblock_client`)
+- **Kernel Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_unblock_applied`)
 
 ### Underlying Kernel Commands
 The tool uses `nft destroy element` to avoid race conditions or errors when removing elements:

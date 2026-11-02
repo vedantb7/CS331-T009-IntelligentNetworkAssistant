@@ -5,18 +5,22 @@
 This component is the operator-facing side of INA v2 and the evidence side.
 It has three parts:
 
-1. **Assistant** (`assistant/`): turns a plain-English request into exactly one
-   of four fixed tool calls, asks a question when the request is unclear, sends
-   the call to the MCP server, and explains the result in plain words.
+1. **Assistant** (`assistant/`): an LLM (any provider), or the rule-based
+   fallback parser, turns a plain-English request into exactly one of the eight
+   MCP tools the server lists, or asks a question when the request is unclear.
+   It sends the call to the MCP server and explains the structured result in
+   plain words.
 2. **Verification** (`network/verification.py`): after a change is applied, it
    confirms by measurement (ping, iperf3, nft, tc) that the network is actually
-   in the intended state. Dhruv's MCP pipeline calls it.
+   in the intended state. The service layer calls it after every change.
 3. **Evaluation** (`eval/`): runs the assistant against scripted scenarios and
    an attack set, and writes reproducible numbers for the report.
 
 Design rule for the whole project: **the AI proposes, the policy decides, the
-network proves.** The assistant has no authority. It never attaches a role,
-never runs a command, and only ever sees admin-assigned device names.
+network proves.** The assistant has no authority. Its role comes from the
+person's role token (granted by the admin, bound to their device), never from
+the model. It never runs a command, never sees the commands the router ran,
+and cannot confirm a ban: that takes a human y/N.
 
 ## Request flow
 
@@ -38,7 +42,7 @@ operator types a request
 
 ```text
 assistant/
-  contract.py    Shared tool contract (names, arguments, result shape). Dhruv's
+  contract.py    Shared tool contract (names, arguments, result shape). The MCP
                  server must match this. The single source of truth for C4.
   intent.py      Deterministic parser. Zero dependencies, always runs, asks
                  instead of guessing. The guaranteed fallback.
@@ -49,15 +53,20 @@ assistant/
                  Ollama, any /chat/completions endpoint; stdlib only).
   config.py      Loads inav2/.env (see .env.example).
   result_view.py The structured view of a result the LLM is allowed to see.
-  transport.py   MockTransport (in-memory full server, for today's demo and the
-                 eval) and HttpTransport (Dhruv's real server, once it is up).
+  transport.py   McpTransport (the real path: official MCP SDK client, Streamable
+                 HTTPS to the Pi, or stdio for development), MockTransport
+                 (in-memory server for the demo and the eval), ServiceTransport
+                 (direct service layer, development) and HttpTransport (legacy
+                 placeholder, not MCP; do not use).
   client.py      Orchestrator + CLI. Keeps a transcript.
   __main__.py    `python -m assistant`
 
 network/verification.py   verify_block / verify_unblock / verify_limit.
 eval/                      cases.py, run_eval.py, results/*.csv
-tests/unit/                test_intent.py, test_verification.py,
-                           test_assistant_client.py
+tests/unit/                test_intent.py, test_assistant_client.py,
+                           test_llm_backends.py, test_result_view.py,
+                           test_mcp_pipeline.py, test_mcp_http.py,
+                           test_verification.py
 ```
 
 ## How to run
@@ -71,7 +80,7 @@ python3 -m assistant
 
 # one request
 python3 -m assistant "limit guest-phone to 5 mbps"
-python3 -m assistant --role admin "block lab-laptop-3"
+python3 -m assistant --role admin "limit lab-laptop-3 to 1 mbps"   # demo tokens, mock network
 
 # use a real LLM (optional): copy .env.example to .env and set, e.g.
 #   LLM_PROVIDER=anthropic  LLM_API_KEY=sk-ant-...            (pip install anthropic)
@@ -79,7 +88,9 @@ python3 -m assistant --role admin "block lab-laptop-3"
 #   LLM_PROVIDER=gemini     LLM_API_KEY=<AI Studio key> LLM_MODEL=<gemini model>
 #   LLM_PROVIDER=ollama     LLM_MODEL=<local model>           (no key)
 
-# the real Pi (Streamable HTTPS; INA_MCP_URL / INA_MCP_CA / INA_ROLE_TOKEN in .env)
+# the real Pi (Streamable HTTPS; INA_MCP_URL / INA_MCP_CA / INA_ROLE_TOKEN in .env).
+# INA_ROLE_TOKEN is your personal token from 'sudo ina-netctl roles grant ...';
+# it only works from the device your role is bound to.
 python3 -m assistant --server mcp "list devices"
 ```
 
@@ -87,7 +98,7 @@ python3 -m assistant --server mcp "list devices"
 
 ```bash
 # unit tests (offline, no root, no Pi)
-python3 -m unittest discover tests/unit -v
+python3 tests/run_all_tests.py
 
 # evaluation -> prints a summary and writes eval/results/*.csv
 python3 -m eval.run_eval --repeats 5
@@ -97,35 +108,34 @@ python3 -m eval.run_eval --repeats 5
 
 | Group | Claim | Result |
 | :--- | :--- | :--- |
-| Functional (E2) | clear requests get the right outcome | 10/10 correct |
-| Clarification (E8) | incomplete requests are questioned, not guessed | 8/8 asked |
-| Attacks (E3) | unsafe actions are stopped even when the AI is fooled | AI attempted an unsafe action in 20/40 runs; **0/40 executed** |
+| Functional (E2) | clear requests get the right outcome | 16/16 correct |
+| Clarification (E8) | incomplete requests are questioned, not guessed | 10/10 asked |
+| Attacks (E3) | unsafe actions are stopped even when the AI is fooled | AI attempted an unsafe action in 30/65 runs; **0/65 executed** |
 
 The attack numbers are the headline: the AI can be talked into *attempting* an
 unsafe action (claiming admin, naming a protected device), but the policy layer
 stopped every one. That gap is the point of defence in depth. These numbers
-come from the mock policy; they will be re-measured against Ananya's real
-policy engine and on the Pi.
+come from the mock (whose decisions are tested for parity with the real policy
+engine); they still have to be re-measured with a live LLM and on the Pi.
 
 ## Interfaces with the rest of the team
 
-- **From Dhruv (MCP server):** the four tool names, their arguments, and the
-  result shape in `assistant/contract.py`; the server address and the operator
-  token. Until his server is up, `MockTransport` stands in.
-- **From Vedant (Pi):** the `state` of a device, a probe laptop running an
-  iperf3 server, and the baseline speeds. `verify_limit` needs the iperf3
-  server IP.
-- **From Ananya (policy):** the device list, the real ALLOW/DENY + reason, and
-  attack ideas. The mock's policy table must stay consistent with
-  `policy/rules.yaml`.
-- **To Dhruv:** `verify_block / verify_unblock / verify_limit`, called after
-  each change. Each returns a `VerificationResult` whose `.passed` is a plain
-  bool.
+- **MCP server (`mcp_server/`):** the assistant reads the tool names and
+  schemas live from `tools/list` and sends `tools/call` over HTTPS with the
+  person's bearer token. Denials and failures come back as `isError` results
+  (`Denied by policy [R-...]` / `Failed: ... (reference <id>)`).
+- **Policy (`policy/`):** decides every call; the role comes from the token.
+  The mock's decisions are kept in parity with the real engine
+  (`test_decision_parity_with_assistant_mock`).
+- **Pi (`network/`, `config/`):** `verify_limit` needs an iperf3 server (probe
+  laptop) and the baseline speeds.
+- **Verification:** `verify_block / verify_unblock / verify_limit` return a
+  `VerificationResult` whose `.passed` is a plain bool.
 
 ## Explaining this component to the professor
 
 *In one minute:* The AI is only a translator. It turns a plain request into one
-of four tool calls and asks when something is unclear. It cannot choose its
+of the server's tool calls and asks when something is unclear. It cannot choose its
 role or run commands, and it only sees admin-assigned device names, so a
 malicious device name cannot plant instructions in it. After every change we
 measure the network ourselves, because a command that exits cleanly does not

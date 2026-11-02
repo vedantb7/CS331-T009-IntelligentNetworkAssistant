@@ -61,10 +61,10 @@ The `ban_client` tool prevents a target device (by hardware MAC address) from as
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`ban_client`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.ban`)
-- **Wireless Primitive:** [`inav2/network/wireless.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/wireless.py) (`ban_station`)
-- **Wireless Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_mac_denied`, `verify_station_gone`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`ban_client`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.ban`)
+- **Wireless Primitive:** [`inav2/network/wireless.py`](../../network/wireless.py) (`ban_station`)
+- **Wireless Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_mac_denied`, `verify_station_gone`)
 
 ### Underlying Commands & File Operations
 

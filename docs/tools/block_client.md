@@ -62,10 +62,10 @@ The `target` parameter accepts four distinct target categories:
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`block_client`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.block`)
-- **Kernel Primitive:** [`inav2/network/access_control.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/access_control.py) (`block_client`)
-- **Kernel Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_block_applied`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`block_client`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.block`)
+- **Kernel Primitive:** [`inav2/network/access_control.py`](../../network/access_control.py) (`block_client`)
+- **Kernel Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_block_applied`)
 
 ### Underlying `nftables` Sets
 

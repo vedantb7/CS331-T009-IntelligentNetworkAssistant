@@ -44,10 +44,10 @@ The `unban_client` tool removes an active Layer 2 Wi-Fi ban previously applied t
 
 ## 3. Implementation Details
 
-- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](file:///home/dhruvv_w/Documents/ina/inav2/mcp_server/tools.py) (`unban_client`)
-- **Authoritative Pipeline:** [`inav2/network/service.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/service.py) (`NetworkService.unban`)
-- **Wireless Primitive:** [`inav2/network/wireless.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/wireless.py) (`unban_station`)
-- **Wireless Verification:** [`inav2/network/verification.py`](file:///home/dhruvv_w/Documents/ina/inav2/network/verification.py) (`verify_mac_not_denied`)
+- **MCP Wrapper:** [`inav2/mcp_server/tools.py`](../../mcp_server/tools.py) (`unban_client`)
+- **Authoritative Pipeline:** [`inav2/network/service.py`](../../network/service.py) (`NetworkService.unban`)
+- **Wireless Primitive:** [`inav2/network/wireless.py`](../../network/wireless.py) (`unban_station`)
+- **Wireless Verification:** [`inav2/network/verification.py`](../../network/verification.py) (`verify_mac_not_denied`)
 
 ### Underlying Commands & File Operations
 ```bash
