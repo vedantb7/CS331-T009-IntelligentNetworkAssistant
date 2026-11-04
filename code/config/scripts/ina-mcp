@@ -1,0 +1,35 @@
+#!/bin/sh
+# /usr/local/bin/ina-mcp -- OPTIONAL stdio-over-SSH access to the INA MCP server.
+#
+# The standard deployment is Streamable HTTP (ina-mcp.service). This launcher is
+# only for operators who reach the server through an SSH forced command instead.
+#
+# Started by sshd through the forced command in ~ina/.ssh/authorized_keys, which
+# also sets the caller's role token, e.g.:
+#   restrict,command="INA_ROLE_TOKEN=<operator-token> /usr/local/bin/ina-mcp" ssh-ed25519 AAAA... operator-laptop
+#
+# Roles come from per-person grants in /etc/ina/grants.json ('ina-netctl roles grant');
+# a grant bound to a device is accepted only when SSH_CLIENT is that device's IP.
+# /etc/ina/mcp.env (optional, root:ina 0640) may set other INA_* variables.
+#
+# This process never runs network commands itself; allowed calls go through
+# 'sudo -n /usr/local/sbin/ina-netctl' (network/privileged.py).
+set -eu
+
+if [ -r /etc/ina/mcp.env ]; then
+    set -a
+    . /etc/ina/mcp.env
+    set +a
+fi
+
+export INA_EXECUTOR=netctl
+export INA_POLICY_AUDIT_LOG="${INA_POLICY_AUDIT_LOG:-/var/log/ina-mcp/policy_audit.jsonl}"
+
+if [ -d /opt/ina/inav2/code ]; then
+    cd /opt/ina/inav2/code
+elif [ -d /opt/ina/code ]; then
+    cd /opt/ina/code
+else
+    cd /opt/ina
+fi
+exec /opt/ina/venv/bin/python -m inav2.mcp_server.server --transport stdio

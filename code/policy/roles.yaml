@@ -1,0 +1,63 @@
+# INA v2 roles and permissions (admin-owned).
+#
+# The admin knows networking and sets these once; only the admin may change
+# them. The operator is a non-expert who handles day-to-day requests. The
+# viewer can only look. The AI model is NOT a role: it only proposes a tool
+# call, and the role comes from the caller's token (policy/authorization.py).
+#
+# Nobody has a role by default - a device on the Wi-Fi is just a client. The
+# admin grants a role to a named person, bound to one registered device:
+#   sudo ina-netctl roles grant <person> <role> --device <device-name>
+# (stored hashed in /etc/ina/grants.json; list / revoke / rotate likewise).
+#
+# actions         which MCP tools (docs/implementation.md) the role may call
+# device_classes  which classes of device the role may act on; classes listed
+#                 under protected_classes in rules.yaml can never be granted
+# bandwidth_kbit  allowed download/upload range for limit_bandwidth, kbit/s
+#                 (must sit inside rules.yaml bandwidth_kbit hard limits)
+# ban             max_minutes      longest ban_client duration
+#                 allow_permanent  may ban with no duration
+#                 unban_scope      any      -> may lift any ban
+#                                  own_role -> may lift only bans made by this role
+#
+# These encode the former rules.yaml entries wifi-001 .. wifi-006 and the
+# role table in docs/tools/*.md ("Role Requirements").
+
+version: "3.0"
+roles:
+  admin:
+    description: "Full control of client devices; wider rate and ban limits than an operator."
+    actions:
+      - get_status
+      - block_client
+      - unblock_client
+      - limit_bandwidth
+      - remove_bandwidth_limit
+      - kick_client
+      - ban_client
+      - unban_client
+      - update_policy
+    device_classes: [client]
+    bandwidth_kbit: {min: 1000, max: 20000}
+    ban: {max_minutes: 10080, allow_permanent: true, unban_scope: any}
+
+  operator:
+    description: "Day-to-day requests on client devices; cannot change rules."
+    actions:
+      - get_status
+      - block_client
+      - unblock_client
+      - limit_bandwidth
+      - remove_bandwidth_limit
+      - kick_client
+      - ban_client
+      - unban_client
+    device_classes: [client]
+    bandwidth_kbit: {min: 2000, max: 20000}
+    ban: {max_minutes: 60, allow_permanent: false, unban_scope: own_role}
+
+  viewer:
+    description: "Read-only: network status only."
+    actions:
+      - get_status
+    device_classes: []

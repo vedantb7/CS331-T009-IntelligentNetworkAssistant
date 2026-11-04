@@ -49,6 +49,7 @@ htmlcov/
 # Editor & OS artifacts
 .vscode/
 .idea/
+.agents/
 *.swp
 *~
 .DS_Store

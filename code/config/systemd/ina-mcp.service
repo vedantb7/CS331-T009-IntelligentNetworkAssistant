@@ -1,0 +1,29 @@
+[Unit]
+Description=INA MCP server (Streamable HTTP, TLS) on the client AP
+# Needs 192.168.50.1 on ap0 before it can bind.
+After=ina-ap-interface.service network-online.target
+Requires=ina-ap-interface.service
+
+[Service]
+Type=simple
+User=ina
+Group=ina
+WorkingDirectory=/opt/ina/inav2/code
+# Roles come from per-person grants in /etc/ina/grants.json (ina-netctl roles ...),
+# re-read on change. Optional legacy shared-role hashes may live in mcp.env.
+EnvironmentFile=-/etc/ina/mcp.env
+Environment=INA_GRANTS_FILE=/etc/ina/grants.json
+Environment=INA_EXECUTOR=netctl
+Environment=INA_POLICY_AUDIT_LOG=/var/log/ina-mcp/policy_audit.jsonl
+Environment=INA_MCP_PUBLIC_URL=https://192.168.50.1:8443
+# Every allowed call goes through 'sudo -n /usr/local/sbin/ina-netctl'; do not
+# add NoNewPrivileges= or ProtectSystem= here, they would break that boundary.
+ExecStart=/opt/ina/venv/bin/python -m inav2.mcp_server.server \
+    --transport streamable-http --host 192.168.50.1 --port 8443 \
+    --tls-cert /etc/ina/tls/server.crt --tls-key /etc/ina/tls/server.key \
+    --allowed-host ina-router --allowed-host ina-router.local
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
