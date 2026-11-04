@@ -1,7 +1,6 @@
-# Prompts Used — INA v2 (Second Half of the Project)
+# Prompts Used — INA v2 
 
-This document lists the main prompts used by the team during the **second half** of the project: re-scoping after feedback, building the INA v2 components, integration, testing and reporting. Prompts from the first half are in the previous repository's `AI_Used/Prompts.md`.
-
+This document lists the main prompts used by the team during the project: re-scoping after feedback, building the INA v2 components, integration, testing and reporting. 
 ---
 
 #### By Khushi
