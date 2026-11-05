@@ -490,6 +490,22 @@ Validates real packet drops and throughput constraints using Linux virtual ether
 2. **MAC Randomization on Mobile Devices:** Modern smartphones randomize their Wi-Fi MAC address by default for new networks. If a phone reconnects with a randomized MAC, it is treated as a new client device until registered in `policy/devices.yaml`.
 3. **Public LLM API Quotas:** When using free-tier LLM endpoints (e.g. Gemini Free), API rate limits (HTTP 429) can occasionally trigger fallback to the local rule-based parser.
 
+### Live router test failures (2026-11-05/06)
+
+We tested the deployed Pi router through the live MCP endpoint: 75 functional and 10 non-functional tests. Results: 65 + 9 passed, 9 + 1 failed, 1 not run. The full results, evidence and root causes are in [docs/live_router_test_report.md](docs/live_router_test_report.md). These are the open failures:
+
+| ID | Severity | Failure | Workaround until fixed |
+|---|---|---|---|
+| L4 / L5 | High | Changing an existing bandwidth limit reports `already configured at <new rate>`, but the old rate stays in tc and `state.json`. `verify_bandwidth_applied()` only checks that the class exists, not its rate. | Run `remove_bandwidth_limit` before setting a new rate. |
+| B14 / R1 | High | Blocking by name and then unblocking by IP clears the kernel but leaves the entry in `state.json`. `reconcile` (run at every boot) then puts the removed block back. | Always refer to a device by the same identifier (its name). |
+| E8 | High | Same keying bug for limits: limit by name, then remove by IP, leaves a stale limit that comes back after reboot. | Same as above. |
+| S12 / S13 | High / Low | After boot, the NTP clock step expires every dnsmasq lease. Registered devices then can't be targeted by name ("Unknown client") and `get_status` lists them by MAC, until they reconnect. | Use the IP, or reconnect the device so it renews its lease. |
+| NF6 | Medium | The `/var/log/ina/commands.jsonl` hash chain breaks under concurrent requests (duplicate `seq` values from parallel `ina-netctl` writers). The policy audit log stays intact. | Avoid parallel calls until the command log is locked. |
+| E3 | Medium | Lax argument typing: `confirm: "yes"` (a string) is treated as `true` and applies a ban. Unknown extra arguments are silently ignored. | Clients must send real booleans. |
+| N3 | Low | With hostapd down, `ban_client` reports the generic "The router could not apply the change" instead of the Wi-Fi/AP error. Nothing is changed. | Check `systemctl is-active hostapd`. |
+
+Also: `get_status` always returns `drift_detected: false`, so the mismatches above are not flagged automatically.
+
 ---
 
 ## 17. Academic Project & Team Information
