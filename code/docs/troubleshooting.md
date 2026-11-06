@@ -525,7 +525,7 @@ This is intended. Role grants must be managed by an administrator logged in to t
 **Fix:**
 
 ```bash
-sudo install -o root -g root -m 0644 /opt/ina/inav2/config/NetworkManager/90-ina-unmanaged.conf /etc/NetworkManager/conf.d/
+sudo install -o root -g root -m 0644 /opt/ina/inav2/code/config/NetworkManager/90-ina-unmanaged.conf /etc/NetworkManager/conf.d/
 sudo systemctl reload NetworkManager
 sudo systemctl restart ina-ap-interface hostapd dnsmasq
 nmcli -t -f DEVICE,STATE device | grep ^ap0     # ap0:unmanaged

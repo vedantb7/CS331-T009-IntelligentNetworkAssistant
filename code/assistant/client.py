@@ -43,6 +43,7 @@ from assistant.contract import FALLBACK_TOOL_DEFINITIONS, ToolCall, ToolName, To
 from assistant import intent as intent_mod
 from assistant.intent import Intent
 from assistant.llm import LLMBackend, get_backend
+from assistant.logger import RequestLogger, get_default_logger
 from assistant.result_view import llm_result_view
 from assistant.transport import MockTransport, Transport
 
@@ -86,12 +87,25 @@ class NetworkAssistant:
                  transport: Optional[Transport] = None,
                  backend: Optional[LLMBackend] = None,
                  role: str = "operator",
-                 prefer_llm: bool = True) -> None:
+                 prefer_llm: bool = True,
+                 logger: Optional[RequestLogger] = None,
+                 enable_logging: bool = True) -> None:
         self.transport = transport or MockTransport()
         self.backend = backend or get_backend(prefer_llm=prefer_llm)
         self.role = role
         self.token = ROLE_TOKENS.get(role, "operator-token")
         self.transcript: List[TurnRecord] = []
+        self.enable_logging = enable_logging
+        self.logger = logger or get_default_logger()
+
+    def _record_turn(self, rec: TurnRecord) -> TurnRecord:
+        self.transcript.append(rec)
+        if self.enable_logging:
+            try:
+                self.logger.log(rec, role=self.role)
+            except Exception:
+                pass
+        return rec
 
     # -- device names the model is allowed to see --------------------------
     def _device_names(self) -> List[str]:
@@ -264,8 +278,7 @@ class NetworkAssistant:
                 intent={"action": "unsupported", "raw_text": request}, outcome="unsupported",
                 reply=unsupported, elapsed_s=time.time() - started,
             )
-            self.transcript.append(rec)
-            return rec
+            return self._record_turn(rec)
         intent = self._vet_llm_call(request, self._interpret(request))
 
         if intent.needs_clarification or intent.action == "unknown":
@@ -275,8 +288,7 @@ class NetworkAssistant:
                 reply=intent.clarification or "Could you give me more detail?",
                 elapsed_s=time.time() - started,
             )
-            self.transcript.append(rec)
-            return rec
+            return self._record_turn(rec)
 
         call = self._build_call(intent, request_id)
         try:
@@ -288,8 +300,7 @@ class NetworkAssistant:
                 reply=f"Could not reach the network service: {err}",
                 elapsed_s=time.time() - started,
             )
-            self.transcript.append(rec)
-            return rec
+            return self._record_turn(rec)
 
         # Check if result requires confirmation (preview)
         is_preview = (
@@ -324,8 +335,7 @@ class NetworkAssistant:
             result=_result_to_dict(result), elapsed_s=time.time() - started,
             llm_view=view, reply_source=source,
         )
-        self.transcript.append(rec)
-        return rec
+        return self._record_turn(rec)
 
     def save_transcript(self, path: str) -> None:
         with open(path, "w", encoding="utf-8") as fh:
@@ -458,7 +468,21 @@ def main(argv: Optional[List[str]] = None) -> int:
                         help="Force the rule-based parser even if an API key is set.")
     parser.add_argument("--transcript", default="",
                         help="Write the session transcript to this file.")
+    parser.add_argument("--no-log", action="store_true",
+                        help="Disable automatic request logging to logs/requests.log.")
+    parser.add_argument("--logs", action="store_true",
+                        help="Display the most recent request logs from logs/requests.log.")
     args = parser.parse_args(argv)
+    if args.logs:
+        logger = get_default_logger()
+        entries = logger.tail(lines=10)
+        if not entries:
+            print("No request log entries found.")
+        else:
+            for line in entries:
+                print(line, end="")
+        return 0
+
     if args.server not in ("", "mcp", "service") and not args.server.startswith(("http://", "https://")):
         parser.error(f"--server must be 'mcp', 'service' or an http(s):// URL, not '{args.server}' "
                      "(for the Pi: --server mcp)")
@@ -478,6 +502,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         transport=transport,
         role=args.role,
         prefer_llm=not args.no_llm,
+        enable_logging=not args.no_log,
     )
 
     if args.request:

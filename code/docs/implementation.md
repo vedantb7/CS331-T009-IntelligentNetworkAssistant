@@ -41,6 +41,7 @@ The assistant enables conversational network administration while defending agai
 - **`transport.py`:** Handles communication with the MCP server:
   - `McpTransport`: Connects to the Raspberry Pi over Streamable HTTP with TLS, presenting the bearer role token. Also supports stdio subprocess spawning for local development.
   - `MockTransport`: In-memory mock server for offline unit tests and evaluation benchmarks.
+- **`logger.py`:** Request and session audit logger recording every conversational query, parsed intent, tool execution result, and latency to human-readable `code/logs/requests.log` and structured `code/logs/requests.jsonl`.
 - **`client.py`:** Main user interface and CLI orchestration loop (`python -m assistant`).
 
 ### 2.2 Intent & Clarification Flow

@@ -11,7 +11,7 @@ Every component in INA v2 is classified by the strongest empirical evidence that
 - **Verified on Hardware:** Executed and validated on the physical Raspberry Pi 5 with real client devices.
 - **Run on Hardware:** Executed end-to-end on the Raspberry Pi 5 (laptop → HTTPS → Pi → kernel); kernel state read back successfully.
 - **Verified in Lab:** Executed against the real Linux kernel using isolated network namespaces (`unshare`), or over real HTTPS on a local workstation.
-- **Unit-Tested:** Tested with mocked kernel executors in Python (`tests/unit/`, 339 tests).
+- **Unit-Tested:** Tested with mocked kernel executors in Python (`tests/unit/`, 342 tests).
 - **Open:** Documented item requiring further empirical instrumentation.
 
 | Subsystem / Feature | Implementation Location | Verification Level | Empirical Evidence |
@@ -138,7 +138,7 @@ unshare -r -n -m sh tests/lab/ina_block_lab.sh
 
 ## 4. Automated Unit & Integration Test Suite
 
-The automated test suite contains **339 tests**:
+The automated test suite contains **342 tests**:
 ```bash
 python3 code/tests/run_all_tests.py
 # Or standard discovery:
@@ -147,16 +147,16 @@ cd code && python3 -m unittest discover tests/unit
 
 ### Execution Results:
 ```text
-Ran 339 tests in 0.532s
+Ran 342 tests in 0.513s
 OK (skipped=25)
-SUCCESS: Ran 339 tests cleanly.
+SUCCESS: Ran 342 tests cleanly.
 ```
 - **Failures:** 0
 - **Errors:** 0
 - **Skipped:** 25 *(when running with system Python without `mcp` SDK installed)*:
   - 1 test (`test_router_config.TestBlockingLab`): Requires `INA_RUN_LAB=1` and `unshare`.
   - 24 tests (`test_mcp_http`, `test_mcp_pipeline`, `test_result_view`, `test_role_grants`): Gracefully skip when `mcp` Python SDK is not in the active interpreter.
-  - When executed inside a virtual environment containing `mcp==2.3.0`, **337 tests pass**, and only 2 skip (the namespace lab test and optional PyYAML test).
+  - When executed inside a virtual environment containing `mcp==2.3.0`, **340 tests pass**, and only 2 skip (the namespace lab test and optional PyYAML test).
 
 ---
 

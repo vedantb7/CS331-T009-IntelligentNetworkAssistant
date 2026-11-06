@@ -212,11 +212,11 @@ All three are hash-chained and share the request ID assigned by the policy guard
 
 ## 6. Component Status
 
-See [testing_and_evaluation.md](testing_and_evaluation.md) for the full matrix. In short:
+See [testing_and_evaluation.md](testing_and_evaluation.md) and [live_router_test_report.md](live_router_test_report.md) for the full test matrices. In short:
 
-- **Router infrastructure:** verified on the Pi.
-- **Application layer:** implemented and covered by unit tests, a real-kernel namespace lab (blocking) and live HTTPS round trips on a laptop.
-- **Pending:** hardware validation of the application layer on the Pi.
+- **Router infrastructure:** verified on the Pi (AP mode, DHCP leases, IPv4 forwarding, NAT masquerade, and boot persistence).
+- **Application layer:** implemented and validated across 342 unit tests, real-kernel network namespace lab tests (packet blocking and isolation), and verified on physical Raspberry Pi 5 hardware (65 functional and 9 non-functional live tests passing over HTTPS MCP).
+- **Known Open Edge Cases:** identifier keying consistency when mixing names vs IP addresses, and rate updates without prior limit removal (documented in [live_router_test_report.md](live_router_test_report.md)).
 
 ---
 

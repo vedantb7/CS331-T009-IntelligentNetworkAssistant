@@ -8,6 +8,8 @@ cannot elevate the caller's role.
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 import unittest
 
 from assistant.client import NetworkAssistant
@@ -88,6 +90,62 @@ class TestInjectionDefence(unittest.TestCase):
         self.assertIn(rec.outcome, ("clarify", "denied"))
         self.assertEqual(len(a.transport.state.blocked), 0)
         self.assertEqual(len(a.transport.state.limits), 0)
+
+
+class TestRequestLogging(unittest.TestCase):
+    def test_requests_logged_to_files(self) -> None:
+        import tempfile
+        from assistant.logger import RequestLogger
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = RequestLogger(logs_dir=tmpdir)
+            a = NetworkAssistant(transport=MockTransport(), role="operator", logger=logger)
+            rec = a.handle("block guest-phone")
+            self.assertEqual(rec.outcome, "success")
+
+            log_file = Path(tmpdir) / "requests.log"
+            jsonl_file = Path(tmpdir) / "requests.jsonl"
+
+            self.assertTrue(log_file.exists())
+            self.assertTrue(jsonl_file.exists())
+
+            log_content = log_file.read_text(encoding="utf-8")
+            self.assertIn("block guest-phone", log_content)
+            self.assertIn("outcome=success", log_content)
+
+            jsonl_lines = jsonl_file.read_text(encoding="utf-8").strip().split("\n")
+            self.assertEqual(len(jsonl_lines), 1)
+            parsed = json.loads(jsonl_lines[0])
+            self.assertEqual(parsed["raw_text"], "block guest-phone")
+            self.assertEqual(parsed["outcome"], "success")
+            self.assertEqual(parsed["role"], "operator")
+
+    def test_logging_disabled(self) -> None:
+        import tempfile
+        from assistant.logger import RequestLogger
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = RequestLogger(logs_dir=tmpdir, enabled=False)
+            a = NetworkAssistant(transport=MockTransport(), role="operator", logger=logger, enable_logging=False)
+            rec = a.handle("list devices")
+            self.assertEqual(rec.outcome, "success")
+
+            log_file = Path(tmpdir) / "requests.log"
+            self.assertFalse(log_file.exists())
+
+    def test_logger_tail(self) -> None:
+        import tempfile
+        from assistant.logger import RequestLogger
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            logger = RequestLogger(logs_dir=tmpdir)
+            a = NetworkAssistant(transport=MockTransport(), role="operator", logger=logger)
+            a.handle("list devices")
+            a.handle("block guest-phone")
+
+            entries = logger.tail(lines=5)
+            self.assertTrue(len(entries) > 0)
+            self.assertIn("block guest-phone", "".join(entries))
 
 
 if __name__ == "__main__":

@@ -176,11 +176,12 @@ def _write_csv(path: str, rows: List[Dict[str, Any]]) -> None:
 
 
 def main(argv: Optional[List[str]] = None) -> int:
+    default_out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "results")
     parser = argparse.ArgumentParser(
         prog="eval.run_eval", description="Run the INA v2 assistant evaluation.")
     parser.add_argument("--repeats", type=int, default=5,
                         help="Times to repeat each attack case (default 5).")
-    parser.add_argument("--out", default="eval/results",
+    parser.add_argument("--out", default=default_out,
                         help="Directory for the CSV result files.")
     args = parser.parse_args(argv)
 
